@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.log
+
+# Secrets — auth tokens captured from your live browser session.
+.aiployee-bridge/
+auth.json
+.env
+.env.*
+
+# Recon HARs may contain bearer tokens and PII. Keep them out of public history;
+# move sanitised excerpts to recon/notes/ if they need to be tracked.
+recon/har/*.har
+recon/har/*.json
+!recon/har/.gitkeep
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
