@@ -1,0 +1,15 @@
+/**
+ * tools/index.ts — barrel re-export for the tool-group façade.
+ *
+ * Library callers: import from "aiployee-bridge/tools" or from the root
+ * "aiployee-bridge" entrypoint (which re-exports these symbols).
+ */
+
+export type { FlowSummary } from "./flows.js";
+export { listFlows, getFlow, updateFlow, validateFlowLocal } from "./flows.js";
+
+export type { AgentSummary } from "./agents.js";
+export { listAgents } from "./agents.js";
+
+export type { PhoneNumberKind, PhoneNumberInfo } from "./numbers.js";
+export { listPhoneNumbers } from "./numbers.js";

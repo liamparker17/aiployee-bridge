@@ -14,3 +14,7 @@ export { DEFAULT_API_BASE, authPath, loadAuth, saveAuth } from "./client/auth.js
 export type { AuthFile } from "./client/auth.js";
 export { ApiError } from "./schema/envelope.js";
 export * from "./schema/index.js";
+
+// Phase 3: tool-group façade
+export type { FlowSummary, AgentSummary, PhoneNumberKind, PhoneNumberInfo } from "./tools/index.js";
+export { listFlows, getFlow, updateFlow, validateFlowLocal, listAgents, listPhoneNumbers } from "./tools/index.js";

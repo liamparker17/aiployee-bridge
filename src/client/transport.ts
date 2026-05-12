@@ -25,6 +25,9 @@ export interface RequestOptions {
 export class Transport {
   constructor(private readonly opts: TransportOptions) {}
 
+  get token(): string { return this.opts.token; }
+  get fetchImpl(): typeof fetch { return this.opts.fetchImpl ?? globalThis.fetch; }
+
   async request<T = unknown>(req: RequestOptions): Promise<T> {
     const url = this.buildUrl(req.path, req.query);
     const ctrl = new AbortController();
