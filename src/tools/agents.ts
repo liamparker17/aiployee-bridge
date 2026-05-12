@@ -3,6 +3,9 @@
  */
 
 import type { Client } from "../client/index.js";
+import type { AgentDetails, AgentUpdate } from "../client/agents.js";
+
+export type { AgentDetails, AgentUpdate };
 
 export interface AgentSummary {
   uuid: string;
@@ -26,4 +29,21 @@ export async function listAgents(c: Client): Promise<AgentSummary[]> {
     uuid: opt.value,
     name: opt.label,
   }));
+}
+
+/**
+ * Get a single agent's full details via the Yii edit form.
+ * Requires Yii cookies in the auth file.
+ */
+export function getAgent(c: Client, uuid: string): Promise<AgentDetails> {
+  return c.getAgent(uuid);
+}
+
+/**
+ * Update an agent via the Yii edit form.
+ * Only fields present in `update` are changed; all others retain current values.
+ * Requires Yii cookies in the auth file.
+ */
+export function updateAgent(c: Client, update: AgentUpdate): Promise<void> {
+  return c.updateAgent(update);
 }

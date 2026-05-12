@@ -12,7 +12,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { Client } from "./client/index.js";
 import { listFlows, getFlow, updateFlow, validateFlowLocal } from "./tools/flows.js";
-import { listAgents } from "./tools/agents.js";
+import { listAgents, getAgent, updateAgent } from "./tools/agents.js";
 import { listPhoneNumbers } from "./tools/numbers.js";
 import { FlowDTO } from "./dto.js";
 
@@ -118,6 +118,65 @@ async function main(): Promise<void> {
       return fail(err);
     }
   });
+
+  // --- get_agent ---
+  server.tool(
+    "get_agent",
+    "Get a single AI agent's full details (prompts, phone numbers, knowledge, etc.) by UUID.",
+    { uuid: z.string().uuid() },
+    async ({ uuid }) => {
+      try {
+        const result = await getAgent(client, uuid);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- update_agent ---
+  server.tool(
+    "update_agent",
+    "Update an AI agent's fields via the Yii edit form. Only supplied fields are changed.",
+    {
+      uuid: z.string().uuid(),
+      name: z.string().optional(),
+      mainGoal: z.string().optional(),
+      prompts: z.string().optional(),
+      openingGreeting: z.string().optional(),
+      summaryPrompt: z.string().optional(),
+      summaryEnabled: z.boolean().optional(),
+      debugPrompt: z.string().optional(),
+      debugEnabled: z.boolean().optional(),
+      phoneNumbers: z.array(z.string()).optional(),
+      knowledgeText: z.string().optional(),
+      knowledgeWebsites: z.array(z.object({ url: z.string() })).optional(),
+      raw: z.record(z.union([z.string(), z.array(z.string())])).optional(),
+    },
+    async (args) => {
+      try {
+        // Build AgentUpdate manually to satisfy exactOptionalPropertyTypes:
+        // only include properties that are actually present (not undefined).
+        const update: import("./tools/agents.js").AgentUpdate = { uuid: args.uuid };
+        if (args.name !== undefined) update.name = args.name;
+        if (args.mainGoal !== undefined) update.mainGoal = args.mainGoal;
+        if (args.prompts !== undefined) update.prompts = args.prompts;
+        if (args.openingGreeting !== undefined) update.openingGreeting = args.openingGreeting;
+        if (args.summaryPrompt !== undefined) update.summaryPrompt = args.summaryPrompt;
+        if (args.summaryEnabled !== undefined) update.summaryEnabled = args.summaryEnabled;
+        if (args.debugPrompt !== undefined) update.debugPrompt = args.debugPrompt;
+        if (args.debugEnabled !== undefined) update.debugEnabled = args.debugEnabled;
+        if (args.phoneNumbers !== undefined) update.phoneNumbers = args.phoneNumbers;
+        if (args.knowledgeText !== undefined) update.knowledgeText = args.knowledgeText;
+        if (args.knowledgeWebsites !== undefined) update.knowledgeWebsites = args.knowledgeWebsites;
+        if (args.raw !== undefined) update.raw = args.raw;
+        await updateAgent(client, update);
+        return ok({ ok: true });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
 
   // --- list_phone_numbers ---
   server.tool("list_phone_numbers", "List all phone numbers (inbound, outbound, human).", async () => {

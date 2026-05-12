@@ -8,8 +8,8 @@
 export type { FlowSummary } from "./flows.js";
 export { listFlows, getFlow, updateFlow, validateFlowLocal } from "./flows.js";
 
-export type { AgentSummary } from "./agents.js";
-export { listAgents } from "./agents.js";
+export type { AgentSummary, AgentDetails, AgentUpdate } from "./agents.js";
+export { listAgents, getAgent, updateAgent } from "./agents.js";
 
 export type { PhoneNumberKind, PhoneNumberInfo } from "./numbers.js";
 export { listPhoneNumbers } from "./numbers.js";

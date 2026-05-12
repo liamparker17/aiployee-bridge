@@ -1,5 +1,6 @@
-import { DEFAULT_API_BASE, loadAuth } from "./auth.js";
+import { DEFAULT_API_BASE, DEFAULT_YII_HOST, loadAuth } from "./auth.js";
 import { Transport, type TransportOptions } from "./transport.js";
+import { YiiTransport, type YiiTransportOptions } from "./yii.js";
 import { getFlowNodes, saveFlow } from "./flows.js";
 import {
   listAgentsDropdown,
@@ -12,12 +13,21 @@ import {
   type PhoneNumberPoolEntry,
   type PhoneNumberPoolType,
 } from "./discovery.js";
+import { getAgent, updateAgent, type AgentDetails, type AgentUpdate } from "./agents.js";
 import type { FlowNode } from "../schema/index.js";
 import type { SaveFlowRequest } from "../schema/flow.js";
 
 export type { DropdownOption, IntegrationsList, PhoneNumberPoolEntry, PhoneNumberPoolType };
+export type { AgentDetails, AgentUpdate };
 
-export interface ClientOptions extends Partial<TransportOptions> {}
+export interface ClientOptions extends Partial<TransportOptions> {
+  /** Yii host override (default: from auth file or DEFAULT_YII_HOST). */
+  yiiHost?: string;
+  /** Yii cookies override (default: from auth file). */
+  yiiCookies?: YiiTransportOptions["cookies"];
+  /** fetchImpl for YiiTransport (tests). */
+  yiiFetchImpl?: typeof fetch;
+}
 
 /**
  * Thin façade over the `/v1/*` API. Construct via `Client.fromAuthFile()`
@@ -26,18 +36,64 @@ export interface ClientOptions extends Partial<TransportOptions> {}
 export class Client {
   readonly transport: Transport;
 
-  constructor(opts: TransportOptions) {
+  /** Yii transport options — present only when auth file included cookies. */
+  private readonly _yiiOpts: YiiTransportOptions | null;
+
+  /** Lazy-constructed YiiTransport instance. */
+  private _yiiTransport: YiiTransport | null = null;
+
+  constructor(opts: TransportOptions, yiiOpts?: YiiTransportOptions) {
     this.transport = new Transport(opts);
+    this._yiiOpts = yiiOpts ?? null;
   }
 
   static async fromAuthFile(overrides: ClientOptions = {}): Promise<Client> {
     const auth = await loadAuth();
-    return new Client({
+    const transportOpts: TransportOptions = {
       token: overrides.token ?? auth.token,
       apiBase: overrides.apiBase ?? auth.apiBase ?? DEFAULT_API_BASE,
       ...(overrides.fetchImpl ? { fetchImpl: overrides.fetchImpl } : {}),
       ...(overrides.onRequest ? { onRequest: overrides.onRequest } : {}),
-    });
+    };
+
+    // Build YiiTransportOptions when cookies are available
+    const cookies = overrides.yiiCookies ?? auth.cookies;
+    const yiiHost = overrides.yiiHost ?? auth.yiiHost ?? DEFAULT_YII_HOST;
+    const yiiOpts: YiiTransportOptions | undefined = cookies
+      ? {
+          yiiHost,
+          cookies,
+          ...(overrides.yiiFetchImpl
+            ? { fetchImpl: overrides.yiiFetchImpl }
+            : {}),
+        }
+      : undefined;
+
+    return new Client(transportOpts, yiiOpts);
+  }
+
+  /**
+   * Lazily-constructed YiiTransport. Throws if Yii cookies were not loaded
+   * (auth file is missing the `cookies` field).
+   */
+  get yiiTransport(): YiiTransport {
+    if (this._yiiTransport) return this._yiiTransport;
+    if (!this._yiiOpts) {
+      throw new Error(
+        "auth incomplete — Yii cookies not configured; run `aiployee-bridge auth` with --cookie flags",
+      );
+    }
+    this._yiiTransport = new YiiTransport(this._yiiOpts);
+    return this._yiiTransport;
+  }
+
+  // --- Agents (Yii form) ---
+  getAgent(uuid: string): Promise<AgentDetails> {
+    return getAgent(this, uuid);
+  }
+
+  updateAgent(update: AgentUpdate): Promise<void> {
+    return updateAgent(this, update);
   }
 
   // --- Flows ---
