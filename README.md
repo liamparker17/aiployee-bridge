@@ -54,6 +54,117 @@ contact attribute writes, flow activation, conversation-record reading, and
 test-widget URL generation. **17 MCP tools total** (see "Tools exposed"
 below).
 
+## Can it build flows end-to-end without a browser?
+
+**Yes.** Install the bridge, wire it into Claude Desktop, ask Claude in plain
+English to build a flow, and Claude will create it on your AIployee tenant
+**without ever opening a browser at runtime**. No headless Chrome, no
+Playwright, no Puppeteer, no Selenium, no `architect-tool`, no DOM scraping
+for flow creation. You also do not need a separate CLI — Claude calls the
+MCP tools directly over stdio.
+
+Example end-to-end interaction in Claude Desktop, after the bridge is
+installed:
+
+> **You:** Build a flow that answers inbound calls on +27877295318, connects
+> to my Tracey agent, and on a transfer outcome routes to the human queue.
+>
+> **Claude (under the hood):**
+> 1. `list_phone_numbers` → finds the inbound number's UUID.
+> 2. `list_agents` → finds Tracey's UUID.
+> 3. Constructs a `FlowDTO` in memory: `inbound_call → connect_call_agent`
+>    with a branch on the "Transferred" outcome to a human-queue node.
+> 4. `validate_flow` → local graph validation (runs entirely in Node, no
+>    network call).
+> 5. `update_flow` → one POST to `/v1/nodes/save`, flow now exists on your
+>    AIployee tenant.
+> 6. Optionally `set_flow_status({status:"Active", confirm:<flow-name>})` →
+>    flips the flow live. The bridge enforces the confirm-token gate AND
+>    refuses if another `Active` flow already owns the inbound number.
+>
+> Total wall-clock: a few seconds, dominated by Claude's thinking. No
+> browser was launched at any step.
+
+## How does it access AIployee without browser automation?
+
+It pretends to be the AIployee web app. Here's the actual mechanism, no
+hand-waving:
+
+**The AIployee editor is a single-page app.** When you click "Save" in the
+visual flow editor at `aiployee.jobix.ai`, the browser fires a
+`POST https://dashboard-api.jobix.ai/v1/nodes/save` with a JSON body and an
+`Authorization: Bearer <access_token>` header (where `<access_token>` is
+the value of your `access_token` cookie). That endpoint is a private JSON
+API — but it's a regular HTTPS endpoint, not a browser-only RPC channel.
+
+**The bridge calls those same endpoints directly.** From
+`src/client/flows.ts`:
+
+```ts
+await transport.request<void>({
+  method: "POST",
+  path: "/nodes/save",
+  body: <wire-shape>,
+});
+```
+
+`transport.request()` runs `globalThis.fetch(url, {method, headers:
+{Authorization: "Bearer <token>", ...}, body: JSON.stringify(...)})` — Node
+20+'s built-in `fetch`. That's the entire transport mechanism for the
+`/v1/*` surface. AIployee's server accepts the call because the bearer
+token is identical to the one its own SPA sends.
+
+**Auth is your own browser session, copied once.** You open
+`aiployee.jobix.ai` in any browser where you're already logged in, copy
+four cookie values out of DevTools (`access_token`, plus
+`PHPSESSID` / `_identity` / `_csrf` if you want the Yii tools), paste them
+into `aiployee-bridge auth ...`. That writes `~/.aiployee-bridge/auth.json`
+(mode 0600). After that, the browser is closed and **never used again** —
+the bridge replays those cookies on every API call. This is the same
+cookie set your browser already holds while you're logged in; the bridge
+is not bypassing authentication, it's using your authenticated session.
+When cookies expire (~7 days for `_identity`, sooner for `PHPSESSID`), the
+bridge throws a clear error telling you to refresh them and re-run
+`aiployee-bridge auth`.
+
+**Two transport classes, one philosophy:**
+
+| Transport | File | Used for | Mechanism |
+|---|---|---|---|
+| `Transport` (JSON API) | `src/client/transport.ts` | Flows, validation, phone numbers, dropdowns, `set_flow_status`, `run_flow_test` | `fetch` POST/GET/PATCH with `Authorization: Bearer <token>`. Unwraps the `{success, code, result, errors}` envelope. Throws `ApiError` on `success: false`. |
+| `YiiTransport` (HTML forms) | `src/client/yii.ts` | Agents, Custom Fields, Contacts, `list_flow_runs`, `get_flow_run` | `fetch` GET to render the Yii form page, parses the HTML with targeted regex (no DOM library), merges your update over the parsed field state, POSTs `application/x-www-form-urlencoded` back to the same form action URL with `Cookie:` + `X-CSRF-Token` headers. |
+
+The Yii path exists because three AIployee surfaces (Agents / Custom Fields
+/ Contacts) and the Conversations page have no JSON-API equivalent — they're
+server-rendered forms. The bridge still doesn't drive a browser to use them;
+it does GET-the-HTML / parse-fields / merge / POST-form-encoded. Same auth
+state your browser uses, no DOM rendering, no clicks, no waits.
+
+**Runtime dependencies in full:** look at `package.json`. The only entries
+under `dependencies` are `@modelcontextprotocol/sdk` (so the LLM client can
+talk to the bridge) and `zod` (input validation). No `puppeteer`, no
+`playwright`, no `chrome-remote-interface`, no `selenium-webdriver`, no
+`jsdom`. Node's built-in `fetch` is the only HTTP client. That's the whole
+runtime footprint.
+
+### The one honest limitation: `run_flow_test`
+
+`run_flow_test` returns a `widgetUrl` from
+`POST /v1/temporary-agent-widget`. The **human** then opens that URL in a
+browser to actually have a test conversation with the flow. The bridge
+doesn't simulate the inbound caller — there's no way to do that over the
+API. Once you've finished the test conversation in your browser, Claude
+calls `get_flow_run` to read the transcript back via the same HTTPS scrape
+path. So:
+
+- Building flows = fully automatic, no browser.
+- Testing the live behaviour = human-in-the-loop for the conversation itself
+  (because YOU need to talk to the agent).
+- Reading the resulting transcript / call record = automatic again.
+
+This is called out honestly in the tool's MCP description so Claude tells
+you to open the URL rather than pretending it ran the test itself.
+
 ## Requirements
 
 | Requirement | Version / Detail |
