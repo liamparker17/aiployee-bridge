@@ -20,12 +20,14 @@ import {
   deleteCustomField,
   type CustomFieldDTO,
 } from "./custom_fields.js";
+import { getContact, updateContactAttribute, type ContactDTO } from "./contacts.js";
 import type { FlowNode } from "../schema/index.js";
 import type { SaveFlowRequest } from "../schema/flow.js";
 
 export type { DropdownOption, IntegrationsList, PhoneNumberPoolEntry, PhoneNumberPoolType };
 export type { AgentDetails, AgentUpdate };
 export type { CustomFieldDTO };
+export type { ContactDTO };
 
 export interface ClientOptions extends Partial<TransportOptions> {
   /** Yii host override (default: from auth file or DEFAULT_YII_HOST). */
@@ -114,6 +116,19 @@ export class Client {
 
   deleteCustomField(key: { slug?: string; uuid?: string }): Promise<void> {
     return deleteCustomField(this, key);
+  }
+
+  // --- Contacts (Yii form) ---
+  getContact(uuid: string): Promise<ContactDTO> {
+    return getContact(this, uuid);
+  }
+
+  updateContactAttribute(args: {
+    contactUuid: string;
+    slug: string;
+    value: string;
+  }): Promise<void> {
+    return updateContactAttribute(this, args);
   }
 
   // --- Flows ---

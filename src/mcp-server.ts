@@ -14,6 +14,7 @@ import { Client } from "./client/index.js";
 import { listFlows, getFlow, updateFlow, validateFlowLocal } from "./tools/flows.js";
 import { listAgents, getAgent, updateAgent } from "./tools/agents.js";
 import { listCustomFields, upsertCustomField, deleteCustomField } from "./tools/custom_fields.js";
+import { getContact, updateContactAttribute } from "./tools/contacts.js";
 import { listPhoneNumbers } from "./tools/numbers.js";
 import { FlowDTO } from "./dto.js";
 
@@ -235,6 +236,40 @@ async function main(): Promise<void> {
         if (args.slug !== undefined) key.slug = args.slug;
         if (args.uuid !== undefined) key.uuid = args.uuid;
         await deleteCustomField(client, key);
+        return ok({ ok: true });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- get_contact ---
+  server.tool(
+    "get_contact",
+    "Get a contact's details and Custom Field attribute values by UUID.",
+    { uuid: z.string() },
+    async ({ uuid }) => {
+      try {
+        const result = await getContact(client, uuid);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- update_contact_attribute ---
+  server.tool(
+    "update_contact_attribute",
+    "Write a single Custom Field value on a Contact. Validates slug and value before any network call. Use for mid-call state writes.",
+    {
+      contactUuid: z.string(),
+      slug: z.string(),
+      value: z.string(),
+    },
+    async ({ contactUuid, slug, value }) => {
+      try {
+        await updateContactAttribute(client, { contactUuid, slug, value });
         return ok({ ok: true });
       } catch (err) {
         return fail(err);

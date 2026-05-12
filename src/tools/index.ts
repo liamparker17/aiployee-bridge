@@ -16,3 +16,6 @@ export { listPhoneNumbers } from "./numbers.js";
 
 export type { CustomFieldDTO, CustomFieldType } from "./custom_fields.js";
 export { listCustomFields, upsertCustomField, deleteCustomField } from "./custom_fields.js";
+
+export type { ContactDTO } from "./contacts.js";
+export { getContact, updateContactAttribute } from "./contacts.js";
