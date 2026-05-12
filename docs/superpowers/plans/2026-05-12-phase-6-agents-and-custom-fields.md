@@ -19,23 +19,34 @@ merging, CSRF, and submission internally; LLM callers see typed DTOs.
 The bridge does **not** pick where per-call state values live during a
 call — the **flow** the user builds picks. The bridge provides:
 
-1. Custom Fields CRUD — define the schema (`detected_intent: string`,
-   `active_skill: string`, `active_skill_prompt: text`, etc.).
-2. Agent CRUD — write the master "OS"-style prompt that references
-   those variables via `{{ variables.<slug> }}`.
-3. The existing Flow tools (Phase 1-4) — wire LLM classifier nodes,
-   per-skill Connect-Call-Agent nodes, and Webhook nodes for variable
-   persistence.
+1. **Custom Fields CRUD** — define the schema (`detected_intent: string`,
+   `active_skill: string`, etc.). Types are constrained to
+   `string|integer|float|boolean|date|array` (verified — see
+   `recon/notes/03-templating-and-writes.md`).
+2. **Agent CRUD** — write the master "OS" prompt and the post-call
+   `summary_prompt`. Prompts reference Custom Fields as
+   **`{{ attributes.<slug> }}`** (NOT `{{ variables.<slug> }}` — the
+   platform's templating namespace is `attributes`; see recon 03).
+3. **Contact attribute writes** — mid-call writes to a Contact's
+   Custom Field values go through `POST /customers/<uuid>/edit` with
+   `SaveCustomerForm[values][<slug>]=...`. The bridge exposes this as
+   `update_contact_attribute`.
+4. **The existing Flow tools** (Phase 1-4) — wire LLM classifier nodes
+   (`ai_data_generation`) and per-skill Connect-Call-Agent nodes with
+   their own `prompt` overrides. Skill switching mid-call is **flow
+   routing**, not prompt swapping. The "Webhook" node (`update_data`)
+   is OUTBOUND HTTP only — it does NOT write attributes; use
+   `update_contact_attribute` or an `api_request` node for that.
 
-The LLM caller composes a state-driven agent with these three
-primitives; the bridge never needs to know whether `detected_intent` is
-ephemeral or persistent during any given call. That's a flow-design
-question, not a bridge-API question.
+The LLM caller composes a state-driven agent with these primitives;
+the bridge never needs to know whether `detected_intent` is ephemeral
+or persistent during any given call. That's a flow-design question,
+not a bridge-API question.
 
 ## Cross-cutting constraints
 
 - Strict TS as before: `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`. Use conditional spreads.
-- **No new heavy dependencies.** HTML parsing uses targeted regexes against the Yii form (the form structure is deterministic — see `02-agents-and-database.md`).
+- **No new heavy dependencies.** HTML parsing uses targeted regexes against the Yii form (the form structure is deterministic — see `02-agents-and-database.md` and `03-templating-and-writes.md`).
 - **Fail loud, no silent coercion.** When the bridge can't extract a field it expects, throw with the exact field path. When form POST returns a redirect to anything other than the expected success URL, throw.
 - **Wire-format mirroring.** Yii uses bracket notation (`AiAgentForm[prompts]`) — the bridge serialises bracket notation on the wire, even if the DTO is camelCase.
 - **Sandbox safety for tests.** Agent integration tests run against `3527076a-...` (Tracey Test). Snapshot+restore in `try/finally`.
@@ -271,11 +282,19 @@ In `src/mcp-server.ts` add:
 ### DTO
 
 ```ts
+export type CustomFieldType =
+  | "string"
+  | "integer"
+  | "float"
+  | "boolean"
+  | "date"
+  | "array";
+
 export interface CustomFieldDTO {
   uuid: string | null;       // null for inserts; assigned by server on first save
   name: string;
-  type: string;              // observed: "string"; others tba — passthrough as-is
-  slug: string;              // the `{{ variables.<slug> }}` key
+  type: CustomFieldType;     // verified enum — see recon/notes/03-templating-and-writes.md
+  slug: string;              // the `{{ attributes.<slug> }}` template key
   description: string;
 }
 ```
@@ -296,19 +315,73 @@ export interface CustomFieldDTO {
 
 ### Type whitelist
 
-Local validation rejects unknown `type` values for now. Observed: `string`. Until each is verified, accept also `number`, `boolean`, `json`, `date` with a warning logged via `onRequest` (the platform may or may not accept these; on rejection the server's error surfaces).
+The accepted `type` enum is verified: `string | integer | float | boolean | date | array`. Maximum 225 fields per tenant. Reject anything outside the enum locally with a clear error message.
 
 ### Verification
 
 - Unit tests for the row-extraction parser (multi-row fixture) and the merge logic (insert, update by slug, delete).
 
+## Task 6.4b — Contacts module (attribute writes)
+
+**Goal:** `update_contact_attribute({contactUuid, slug, value})` + `get_contact({uuid})` so the LLM caller has a mid-call write path for Custom Field values.
+
+### New files
+
+- `src/client/contacts.ts`
+- `src/tools/contacts.ts`
+
+### Form shape (verified — see `recon/notes/03-templating-and-writes.md`)
+
+- URL: `POST /customers/<uuid>/edit` (Yii)
+- Form: `SaveCustomerForm` (57 fields on the verified create-page sample)
+- Built-in fields: `SaveCustomerForm[phone|email|name|timezone]`
+- Custom Field values: `SaveCustomerForm[values][<slug>]` — 1:1 with `{{ attributes.<slug> }}`
+- Input types:
+  - `text` for slugs typed `string` / `array`
+  - `number` for `integer` / `float`
+  - `select-one` for `boolean` (or any enum-typed Custom Field)
+
+### DTO
+
+```ts
+export interface ContactDTO {
+  uuid: string;
+  phone: string | null;
+  email: string | null;
+  name: string | null;
+  timezone: string | null;
+  attributes: Record<string, string>;  // keyed by slug; values as the form rendered them
+}
+```
+
+### Functions
+
+- `getContact(c, uuid): Promise<ContactDTO>` — `YiiTransport.getForm("/customers/<uuid>/edit")`, translate `SaveCustomerForm[*]` and `SaveCustomerForm[values][*]` into the DTO.
+- `updateContactAttribute(c, {contactUuid, slug, value}): Promise<void>` — `getForm`, override the single `SaveCustomerForm[values][<slug>]` field, `submitForm`. Throws `YiiFormError` on failure.
+
+### Tool registration
+
+| Tool name | Args | Returns |
+|---|---|---|
+| `get_contact` | `{uuid}` | `ContactDTO` |
+| `update_contact_attribute` | `{contactUuid, slug, value}` | `{ok: true}` |
+
+### Local validation
+
+- `slug`: must be `^[_a-z][_a-z0-9]*$` (matches the platform's slug pattern).
+- `value`: bridge sends as string. Coercion happens at the form layer — the server validates against the Custom Field's declared `type`. Bridge does NOT pre-type-check, since the schema isn't available at write time without a separate fetch — instead, surface the server's validation error cleanly.
+
+### Verification
+
+- Unit test for the parser with a `SaveCustomerForm` fixture: round-trip `getContact` → `updateContactAttribute` overrides → assert the URL-encoded body has `SaveCustomerForm%5Bvalues%5D%5B<slug>%5D=<encoded value>`.
+
 ## Task 6.5 — MCP wiring + live tests
 
-**Goal:** tools registered in `mcp-server.ts`, integration tests against the sandbox agent.
+**Goal:** tools registered in `mcp-server.ts`, integration tests against the sandbox agent and a disposable test Custom Field.
 
 ### `src/mcp-server.ts` additions
 
-Register the five new tools (`get_agent`, `update_agent`, `list_custom_fields`, `upsert_custom_field`, `delete_custom_field`). All other behaviour unchanged. On startup, when the auth file lacks Yii cookies, register them but make the handlers throw a clear "auth incomplete — re-run `aiployee-bridge auth` with --cookie flags" message.
+Register the seven new tools: `get_agent`, `update_agent`, `list_custom_fields`, `upsert_custom_field`, `delete_custom_field`, `get_contact`, `update_contact_attribute`. All other behaviour unchanged. On startup, when the auth file lacks Yii cookies, register them but make the handlers throw a clear "auth incomplete — re-run `aiployee-bridge auth` with --cookie flags" message.
 
 ### `tests/integration-yii.test.ts`
 
@@ -338,7 +411,7 @@ Same safety rules as Phase 5: `try/finally`, 30s timeouts per `it`, sandbox-only
 
 ## Out of scope for Phase 6
 
-- Contacts CRUD (`/customers`) — Phase 6.5 if needed.
+- Contact CREATE / DELETE (only attribute writes are in scope — `get_contact` and `update_contact_attribute`). Contact lifecycle is a Phase 7 concern.
 - Actions CRUD (`/v1/action/*`) — Phase 7.
 - Voice catalogue, Conversations, Widgets, Automation V2 — deferred.
 - Flow-template generation ("here's an Ellie OS, build me the matching flow") — deliberately not a bridge concern; the LLM caller composes flows from primitives.
