@@ -14,11 +14,18 @@ import {
   type PhoneNumberPoolType,
 } from "./discovery.js";
 import { getAgent, updateAgent, type AgentDetails, type AgentUpdate } from "./agents.js";
+import {
+  listCustomFields,
+  upsertCustomField,
+  deleteCustomField,
+  type CustomFieldDTO,
+} from "./custom_fields.js";
 import type { FlowNode } from "../schema/index.js";
 import type { SaveFlowRequest } from "../schema/flow.js";
 
 export type { DropdownOption, IntegrationsList, PhoneNumberPoolEntry, PhoneNumberPoolType };
 export type { AgentDetails, AgentUpdate };
+export type { CustomFieldDTO };
 
 export interface ClientOptions extends Partial<TransportOptions> {
   /** Yii host override (default: from auth file or DEFAULT_YII_HOST). */
@@ -94,6 +101,19 @@ export class Client {
 
   updateAgent(update: AgentUpdate): Promise<void> {
     return updateAgent(this, update);
+  }
+
+  // --- Custom Fields (Yii bulk form) ---
+  listCustomFields(): Promise<CustomFieldDTO[]> {
+    return listCustomFields(this);
+  }
+
+  upsertCustomField(dto: CustomFieldDTO): Promise<CustomFieldDTO> {
+    return upsertCustomField(this, dto);
+  }
+
+  deleteCustomField(key: { slug?: string; uuid?: string }): Promise<void> {
+    return deleteCustomField(this, key);
   }
 
   // --- Flows ---

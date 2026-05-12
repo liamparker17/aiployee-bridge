@@ -13,6 +13,7 @@ import { z } from "zod";
 import { Client } from "./client/index.js";
 import { listFlows, getFlow, updateFlow, validateFlowLocal } from "./tools/flows.js";
 import { listAgents, getAgent, updateAgent } from "./tools/agents.js";
+import { listCustomFields, upsertCustomField, deleteCustomField } from "./tools/custom_fields.js";
 import { listPhoneNumbers } from "./tools/numbers.js";
 import { FlowDTO } from "./dto.js";
 
@@ -171,6 +172,69 @@ async function main(): Promise<void> {
         if (args.knowledgeWebsites !== undefined) update.knowledgeWebsites = args.knowledgeWebsites;
         if (args.raw !== undefined) update.raw = args.raw;
         await updateAgent(client, update);
+        return ok({ ok: true });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- list_custom_fields ---
+  server.tool(
+    "list_custom_fields",
+    "List all Custom Field schema rows for the tenant (the {{ attributes.<slug> }} variable definitions).",
+    async () => {
+      try {
+        const result = await listCustomFields(client);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- upsert_custom_field ---
+  server.tool(
+    "upsert_custom_field",
+    "Create or update a Custom Field by slug (or uuid when present). Returns the saved row with server-assigned uuid.",
+    {
+      uuid: z.string().nullable().optional(),
+      name: z.string(),
+      type: z.enum(["string", "integer", "float", "boolean", "date", "array"]),
+      slug: z.string(),
+      description: z.string(),
+    },
+    async (args) => {
+      try {
+        const dto = {
+          uuid: args.uuid ?? null,
+          name: args.name,
+          type: args.type,
+          slug: args.slug,
+          description: args.description,
+        };
+        const result = await upsertCustomField(client, dto);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- delete_custom_field ---
+  server.tool(
+    "delete_custom_field",
+    "Delete a Custom Field by slug or uuid. Exactly one must be provided.",
+    {
+      slug: z.string().optional(),
+      uuid: z.string().optional(),
+    },
+    async (args) => {
+      try {
+        const key: { slug?: string; uuid?: string } = {};
+        if (args.slug !== undefined) key.slug = args.slug;
+        if (args.uuid !== undefined) key.uuid = args.uuid;
+        await deleteCustomField(client, key);
         return ok({ ok: true });
       } catch (err) {
         return fail(err);

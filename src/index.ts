@@ -16,5 +16,5 @@ export { ApiError } from "./schema/envelope.js";
 export * from "./schema/index.js";
 
 // Phase 3: tool-group façade
-export type { FlowSummary, AgentSummary, AgentDetails, AgentUpdate, PhoneNumberKind, PhoneNumberInfo } from "./tools/index.js";
-export { listFlows, getFlow, updateFlow, validateFlowLocal, listAgents, getAgent, updateAgent, listPhoneNumbers } from "./tools/index.js";
+export type { FlowSummary, AgentSummary, AgentDetails, AgentUpdate, PhoneNumberKind, PhoneNumberInfo, CustomFieldDTO, CustomFieldType } from "./tools/index.js";
+export { listFlows, getFlow, updateFlow, validateFlowLocal, listAgents, getAgent, updateAgent, listPhoneNumbers, listCustomFields, upsertCustomField, deleteCustomField } from "./tools/index.js";

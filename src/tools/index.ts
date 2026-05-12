@@ -13,3 +13,6 @@ export { listAgents, getAgent, updateAgent } from "./agents.js";
 
 export type { PhoneNumberKind, PhoneNumberInfo } from "./numbers.js";
 export { listPhoneNumbers } from "./numbers.js";
+
+export type { CustomFieldDTO, CustomFieldType } from "./custom_fields.js";
+export { listCustomFields, upsertCustomField, deleteCustomField } from "./custom_fields.js";
