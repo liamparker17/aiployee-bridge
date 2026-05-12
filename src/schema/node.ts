@@ -120,7 +120,10 @@ export function resolveNodeType(input: string): NodeType {
 }
 
 // Permissive data block — used until each type's shape is pinned.
-const PermissiveData = z.object({ data_key: z.string() }).passthrough();
+// `data_key` is observed on most node types but not all (router /
+// condition nodes seen in production omit it). Accept any object shape
+// and let downstream code synthesise a key when one is needed.
+const PermissiveData = z.object({ data_key: z.string().optional() }).passthrough();
 
 // Discriminated union of known + permissive fallback. The bridge
 // validates strictly against known types and lets unknowns through as
@@ -148,10 +151,21 @@ export type FlowNode = z.infer<typeof FlowNode>;
 
 // Type-aware parser. Use this instead of FlowNode.parse() directly when
 // you want strict validation on the known three types.
+//
+// Strict-schema failures degrade to permissive parsing so a single
+// mis-modelled field can't take down `get_flow` for the whole flow.
+// The bridge is in a "load everything, edit safely later" posture —
+// drift surfaces via validate_flow rather than parse errors.
 export function parseFlowNode(input: unknown): FlowNode {
   const shallow = FlowNode.parse(input);
   const known = NodeDataByType[shallow.type as keyof typeof NodeDataByType];
-  const data = known ? known.parse(shallow.data) : PermissiveData.parse(shallow.data);
+  let data: unknown;
+  if (known) {
+    const strict = known.safeParse(shallow.data);
+    data = strict.success ? strict.data : PermissiveData.parse(shallow.data);
+  } else {
+    data = PermissiveData.parse(shallow.data);
+  }
   return { ...shallow, data };
 }
 

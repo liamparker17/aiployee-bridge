@@ -284,7 +284,11 @@ export function fromWire(
   );
 
   // ---- Convert nodes ----------------------------------------------------
-  const nodes: NodeDTO[] = wireNodes.map((wn) => {
+  // Per-node tolerance: a single mis-modelled node must not blow up the
+  // whole flow. Failures are logged and the node is dropped so the LLM
+  // still gets the rest of the graph. validate_flow can flag drift later.
+  const nodes: NodeDTO[] = wireNodes.flatMap((wn): NodeDTO[] => {
+   try {
     if (wn.data === null || typeof wn.data !== "object" || Array.isArray(wn.data)) {
       throw new Error(`node ${wn.uuid}: data is not an object`);
     }
@@ -400,13 +404,20 @@ export function fromWire(
       };
     }
 
-    return {
+    return [{
       uuid: wn.uuid,
       name: wn.name,
       position: { x: wn.position[0], y: wn.position[1] },
       status: wn.status,
       config,
-    };
+    }];
+   } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[aiployee-bridge] dropping node ${wn.uuid} (${wn.type}) during fromWire: ${reason.slice(0, 200)}`,
+      );
+      return [];
+   }
   });
 
   // ---- Convert connections (iterate output sockets only) ----------------
