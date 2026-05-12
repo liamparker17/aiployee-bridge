@@ -10,11 +10,21 @@ export interface AuthFile {
   token: string;
   /** Optional override for the API host; defaults to https://dashboard-api.jobix.ai/v1 */
   apiBase?: string;
+  /** Yii host; defaults to https://aiployee.jobix.ai when absent. */
+  yiiHost?: string;
+  /** Yii session cookies. When absent, Yii-form features (Agents, Custom Fields, Contacts) are unavailable. */
+  cookies?: {
+    PHPSESSID?: string;
+    _identity?: string;
+    _csrf?: string;
+    access_token?: string;
+  };
   /** When the token was saved, for diagnostics. */
   savedAt: string;
 }
 
 export const DEFAULT_API_BASE = "https://dashboard-api.jobix.ai/v1";
+export const DEFAULT_YII_HOST = "https://aiployee.jobix.ai";
 
 export function authPath(): string {
   return path.join(homedir(), ".aiployee-bridge", "auth.json");
@@ -38,14 +48,23 @@ export async function loadAuth(): Promise<AuthFile> {
   if (!parsed.token || typeof parsed.token !== "string") {
     throw new Error(`auth file at ${p} is missing "token"`);
   }
-  return {
+  const result: AuthFile = {
     token: parsed.token,
     savedAt: parsed.savedAt ?? "(unknown)",
     ...(parsed.apiBase ? { apiBase: parsed.apiBase } : {}),
+    ...(parsed.yiiHost ? { yiiHost: parsed.yiiHost } : {}),
+    ...(parsed.cookies ? { cookies: parsed.cookies } : {}),
   };
+  return result;
 }
 
-export async function saveAuth(token: string, apiBase?: string): Promise<string> {
+export async function saveAuth(opts: {
+  token: string;
+  apiBase?: string;
+  yiiHost?: string;
+  cookies?: AuthFile["cookies"];
+}): Promise<string> {
+  const { token, apiBase, yiiHost, cookies } = opts;
   const p = authPath();
   const dir = path.dirname(p);
   await fs.mkdir(dir, { recursive: true });
@@ -53,6 +72,8 @@ export async function saveAuth(token: string, apiBase?: string): Promise<string>
     token,
     savedAt: new Date().toISOString(),
     ...(apiBase ? { apiBase } : {}),
+    ...(yiiHost ? { yiiHost } : {}),
+    ...(cookies ? { cookies } : {}),
   };
   await fs.writeFile(p, JSON.stringify(payload, null, 2), { mode: 0o600 });
   try {
