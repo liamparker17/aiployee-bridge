@@ -98,20 +98,83 @@ function parseFlowListResult(result: unknown): FlowSummary[] {
   });
 }
 
-/** Best-effort HTML scrape: extract flow rows from the Yii listing page. */
+/**
+ * Best-effort HTML scrape of the Yii flows GridView.
+ *
+ * Walks each <tr>…</tr> block that mentions a /flows/<uuid> link, then
+ * pulls text out of the surrounding <td> cells and identifies each column
+ * by content shape rather than position (status = "Active"/"Inactive";
+ * modifiedAt = anything that looks like a date; name = the remaining text
+ * cell that isn't "(not set)" or empty). This way the scraper survives
+ * column reorders.
+ */
 function scrapeFlowsHtml(html: string): FlowSummary[] {
   const summaries: FlowSummary[] = [];
-  // Match <a href="/flows/<uuid>">…</a>
-  const linkRe = /href="\/flows\/([0-9a-fA-F-]{36})"/gi;
   const seen = new Set<string>();
-  let m: RegExpExecArray | null;
-  while ((m = linkRe.exec(html)) !== null) {
-    const uuid = m[1];
-    if (uuid === undefined || seen.has(uuid)) continue;
+  const uuidRe = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+  const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+  const cellRe = /<td\b[^>]*>([\s\S]*?)<\/td>/gi;
+
+  let rowMatch: RegExpExecArray | null;
+  while ((rowMatch = rowRe.exec(html)) !== null) {
+    const rowHtml = rowMatch[1] ?? "";
+    const hrefMatch = /href="\/flows\/([0-9a-fA-F-]{36})"/i.exec(rowHtml);
+    const keyMatch = uuidRe.exec(rowMatch[0] ?? "");
+    const uuid = hrefMatch?.[1] ?? keyMatch?.[0];
+    if (!uuid || seen.has(uuid)) continue;
     seen.add(uuid);
-    summaries.push({ uuid, name: "(unknown — scraped from HTML)", status: "Inactive", modifiedAt: null });
+
+    const cellTexts: string[] = [];
+    let cellMatch: RegExpExecArray | null;
+    cellRe.lastIndex = 0;
+    while ((cellMatch = cellRe.exec(rowHtml)) !== null) {
+      cellTexts.push(decodeHtmlEntities(stripTags(cellMatch[1] ?? "")).trim());
+    }
+
+    let status: "Active" | "Inactive" = "Inactive";
+    let modifiedAt: string | null = null;
+    let name = "";
+
+    const dateLike = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
+
+    for (const text of cellTexts) {
+      if (!text) continue;
+      if (text === "Active" || text === "Inactive") {
+        status = text;
+        continue;
+      }
+      if (modifiedAt === null && dateLike.test(text) && /\d{4}/.test(text)) {
+        modifiedAt = text;
+        continue;
+      }
+      if (!name && text !== "(not set)" && !text.startsWith(uuid.slice(0, 8)) && text.length < 200) {
+        name = text;
+      }
+    }
+
+    summaries.push({
+      uuid,
+      name: name || "(unknown — scraped from HTML)",
+      status,
+      modifiedAt,
+    });
   }
+
   return summaries;
+}
+
+function stripTags(s: string): string {
+  return s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+}
+
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ");
 }
 
 
