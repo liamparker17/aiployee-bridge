@@ -4,15 +4,69 @@ MCP server that exposes the AIployee Flows API as high-level tool calls so an
 LLM client can build and edit flows in 3–5 tool calls instead of 20–30 rounds
 of DOM scraping.
 
+## Background — what this is for
+
+**What is AIployee?** AIployee (`aiployee.jobix.ai`) is a hosted platform for
+building voice + chat AI agents and the **flows** that orchestrate them
+(triggers → agent calls → branching logic → emails / SMS / API calls). Flows
+are graphs of nodes; each node has a typed config block. The platform has a
+visual editor in the browser plus a private JSON API at
+`dashboard-api.jobix.ai/v1/*` for the editor itself.
+
+**What is MCP?** [Model Context Protocol](https://modelcontextprotocol.io) is
+the standard for letting an LLM client (Claude Desktop, Cursor, Windsurf,
+Continue, etc.) call typed tools provided by a local process. The LLM sees a
+list of tools, picks one, fills in arguments, and the local process executes
+it. MCP servers usually speak stdio JSON-RPC.
+
+**Why this bridge exists.** Without it, an LLM trying to "go change the
+opening greeting on Tracey to X" has to drive a real browser, scrape the DOM,
+click form fields, and submit Yii forms — 20–30 brittle tool calls and 60+
+seconds of latency. With `aiployee-bridge`, the same task is one MCP call:
+`update_agent({uuid, openingGreeting: "..."})`. The bridge speaks HTTPS
+directly to AIployee's API (and to the Yii form endpoints where there is no
+JSON API) and returns clean JSON DTOs.
+
+**Who this is for.** Anyone using a hosted AIployee tenant who wants an
+LLM-driven workflow over their flows, agents, custom fields, and conversation
+records. **You need an existing AIployee account** — this is not a
+replacement for AIployee, it's a programmatic surface over your own tenant.
+
+**What it is NOT.**
+- Not a CLI for managing flows by hand. The only CLI subcommand is `auth`
+  (one-time credential setup). All flow / agent / contact operations are MCP
+  tools driven by an LLM client.
+- Not a browser-automation tool. No headless Chrome, no Playwright, no DOM
+  scraping for the JSON-API surfaces. Yii form pages ARE scraped (because
+  AIployee renders them server-side), but with targeted regex, not a browser.
+- Not affiliated with `architect-tool`. Distinct codebase, distinct purpose,
+  distinct deliverable — `aiployee-bridge` runs standalone on Node 20+.
+
 ## What it is
 
 `aiployee-bridge` is a standalone stdio MCP server. It speaks HTTPS directly
-to `https://dashboard-api.jobix.ai/v1` (and, for Yii surfaces, to
+to `https://dashboard-api.jobix.ai/v1` (and, for Yii form surfaces, to
 `https://aiployee.jobix.ai`) — no browser automation, no architect-tool
 dependency. Wire it into Claude Desktop, Cursor, Windsurf, or Continue; the
 LLM gets tools covering flow listing, inspection, editing, validation, agent
 enumeration, phone-number lookup, agent prompt editing, custom-field CRUD,
-and contact attribute writes.
+contact attribute writes, flow activation, conversation-record reading, and
+test-widget URL generation. **17 MCP tools total** (see "Tools exposed"
+below).
+
+## Requirements
+
+| Requirement | Version / Detail |
+|---|---|
+| Node.js | >= 20.10 (uses native `fetch`, ESM, `node:test`) |
+| AIployee account | Active session on `aiployee.jobix.ai` (your own tenant) |
+| MCP client | Claude Desktop, Cursor, Windsurf, Continue, or any MCP-stdio host |
+| OS | macOS, Linux, or Windows (paths use `~/.aiployee-bridge/`) |
+| Runtime deps | `@modelcontextprotocol/sdk` and `zod` only — no browser, no other native libs |
+
+Browser session cookies (`PHPSESSID`, `_identity`, `_csrf`) are needed
+ONLY if you want to use the Yii-form tools (Agents / Custom Fields /
+Contacts). The pure-JSON Flows tools need only the bearer token.
 
 ## Quick start
 
@@ -107,6 +161,40 @@ cloned the repo. On Windows use forward slashes or escaped backslashes.
 
 Restart the MCP client after editing the config.
 
+### 4. Use it
+
+Open your MCP client (e.g. Claude Desktop). The 17 tools below are now
+available to the LLM. You don't call them by hand — you ask the LLM in
+plain English and it picks the right tool:
+
+> "What flows do I have? Show me the inactive ones."
+>
+> → LLM calls `list_flows`, filters status===Inactive, replies in prose.
+
+> "Update Tracey's prompt to say she's a restaurant booking agent for
+> L'Elixer, opening at 6pm Mondays through Saturdays."
+>
+> → LLM calls `get_agent({uuid})` to read current prompt, drafts the new
+> prompt, calls `update_agent({uuid, prompts: "..."})`, confirms in prose.
+
+> "Activate the 'After-hours booking' flow."
+>
+> → LLM calls `list_flows`, finds the flow, calls `set_flow_status(...)`
+> with the flow's exact name as the `confirm` token. If another active
+> flow already owns the inbound phone number the bridge throws with both
+> flow UUIDs and the LLM explains the collision.
+
+> "Show me yesterday's calls and tell me which ones got transferred."
+>
+> → LLM calls `list_flow_runs`, then `get_flow_run` on the interesting
+> ones to read transcripts.
+
+The bridge is read-most-of-the-time and write-when-asked. Confirmation
+gates live in the tool layer (`set_flow_status` requires a name match;
+write tools that affect production routing surface errors loudly rather
+than silently retrying). Read the "Failure modes worth knowing" section
+below before you let an LLM activate live numbers.
+
 ## Tools exposed
 
 | Tool | Arguments | Returns |
@@ -190,23 +278,84 @@ All tools return JSON serialised as a single MCP text content block.
   safely (read and save preserve the original data opaquely), but local
   validation via `validate_flow` does not constrain their `data` block.
 
+## Repo layout
+
+```
+src/
+  mcp-server.ts        — stdio MCP server entry point; registers all 17 tools
+  auth-cli.ts          — `aiployee-bridge auth` subcommand (the ONLY CLI command)
+  index.ts             — library entrypoint when used as a Node module
+  client/
+    transport.ts       — JSON envelope wrapper for /v1/* (bearer auth)
+    yii.ts             — Yii form GET/parse/merge/POST transport
+    auth.ts            — read/write ~/.aiployee-bridge/auth.json
+    flows.ts           — getFlowNodes / saveFlow (low-level)
+    flow_status.ts     — read-then-conditional-PATCH activation
+    flow_runs.ts       — /calls listing HTML scrape
+    flow_run_detail.ts — /calls/<uuid>/details HTML scrape
+    test_widget.ts     — /temporary-agent-widget POST + agent_uuid pivot
+    agents.ts          — Yii ai-agent edit form get/update
+    custom_fields.ts   — Yii customer-fields bulk form
+    contacts.ts        — Yii contact form
+    discovery.ts       — dropdown / pool endpoints
+    index.ts           — Client class factory
+  tools/               — thin façade re-exports for the public tool surface
+  schema/              — Zod schemas for /v1/* envelopes
+  dto.ts               — bridge-facing DTOs (camelCase) + normalize.ts
+  normalize.ts         — DTO <-> wire shape conversion
+  validate.ts          — local flow-graph validator
+tests/
+  *.test.ts            — node:test unit tests (no network; injected fetchImpl)
+  integration*.test.ts — env-gated live tests (AIPLOYEE_BRIDGE_LIVE=1)
+recon/notes/           — endpoint reconnaissance writeups (read these before adding new endpoints)
+docs/superpowers/      — design docs + execution plans
+```
+
 ## Development
 
-Run unit tests:
+Type-check without emitting:
+
+```sh
+npm run typecheck
+```
+
+Run unit tests (fast, no network):
 
 ```sh
 npm test
 ```
 
-Run live integration tests (requires auth and a sandbox environment):
+Run live integration tests (requires `~/.aiployee-bridge/auth.json` and a
+sandbox tenant):
 
 ```sh
 AIPLOYEE_BRIDGE_LIVE=1 npm test
 ```
 
-For design decisions and endpoint documentation see
-`docs/superpowers/specs/2026-05-12-aiployee-bridge-design.md` and
-`recon/notes/01-api.md`.
+Watch-mode build:
+
+```sh
+npm run dev
+```
+
+### Adding a new tool
+
+1. Add the recon writeup under `recon/notes/` documenting the endpoint
+   (method, path, request shape, response shape — sample with `curl`).
+2. Add the implementation under `src/client/<feature>.ts` using
+   `c.transport.request(...)` or `c.yiiTransport.fetchHtml(...)`.
+3. Add unit tests in `tests/<feature>.test.ts` with an injected
+   `fetchImpl` — no real network.
+4. Add a thin re-export in `src/tools/<feature>.ts`.
+5. Wire the barrel exports in `src/tools/index.ts` and `src/index.ts`.
+6. Register the MCP tool in `src/mcp-server.ts` with a descriptive
+   `description` (this is what the LLM reads when choosing tools).
+7. Update the "Tools exposed" table in this README.
+
+For design context and endpoint documentation:
+- `docs/superpowers/specs/2026-05-12-aiployee-bridge-design.md` — overall design
+- `docs/superpowers/plans/` — execution plans for each phase
+- `recon/notes/` — endpoint-by-endpoint reconnaissance
 
 ## IP / licensing
 
