@@ -179,98 +179,315 @@ Browser session cookies (`PHPSESSID`, `_identity`, `_csrf`) are needed
 ONLY if you want to use the Yii-form tools (Agents / Custom Fields /
 Contacts). The pure-JSON Flows tools need only the bearer token.
 
-## Quick start
+## Install from zero — full walkthrough
 
-### 1. Clone and build
+This section assumes you have **never used Git, Node.js, or a terminal
+before**. If you're already a developer, skim it; the short version is in
+"Quick install (for developers)" below.
+
+### Step 0. Install the three things you need (one-time, ~5 minutes)
+
+You need three pieces of software on your computer before you can install
+the bridge itself. All three are free and signed by the original publishers.
+
+1. **Node.js** (version 20.10 or newer). This is the runtime the bridge
+   runs on.
+   - Go to https://nodejs.org/en/download
+   - Download the "LTS" installer for your operating system (macOS,
+     Windows, or Linux).
+   - Run the installer with all default options.
+   - Verify it worked by opening your terminal (see step 2 below) and
+     typing `node --version`. You should see something like `v20.x.x` or
+     newer. If you see "command not found", restart your terminal or
+     reboot — the installer needs a fresh shell session.
+
+2. **Git** (the tool that downloads the bridge's source code).
+   - Go to https://git-scm.com/downloads
+   - Download the installer for your operating system.
+   - On Windows, the installer asks several questions; click "Next" on
+     all of them — the defaults are fine.
+   - Verify by typing `git --version` in your terminal.
+
+3. **A terminal** (already on your computer; you just need to find it).
+   - **macOS:** Press `Cmd + Space`, type `Terminal`, press Enter.
+   - **Windows:** Press the Start key, type `PowerShell`, press Enter.
+     Do NOT use the old "Command Prompt" — PowerShell is what you want.
+   - **Linux:** You already know.
+
+4. **Claude Desktop** (the LLM client that will use the bridge).
+   - Go to https://claude.ai/download
+   - Install it, sign in with your Anthropic account.
+   - On the first run, just close it again — you'll come back to it in
+     step 4 below.
+
+### Step 1. Download the bridge
+
+In your terminal, paste these three commands one at a time, pressing
+Enter after each. The `cd` command means "go to the home folder";
+`git clone` downloads the source code; `cd aiployee-bridge` moves into
+the folder you just downloaded.
 
 ```sh
+cd ~
 git clone https://github.com/liamparker17/aiployee-bridge.git
 cd aiployee-bridge
+```
+
+You should see a folder called `aiployee-bridge` appear in your home
+directory. If `git clone` says "Repository not found" or asks for a
+password, the repo is private and you need to be granted access first —
+contact the author.
+
+### Step 2. Build the bridge
+
+Still in the `aiployee-bridge` folder, run these two commands. The first
+downloads the bridge's library dependencies; the second compiles the
+TypeScript source into JavaScript that Node can run. Each takes about a
+minute.
+
+```sh
 npm install
 npm run build
 ```
 
-Requires Node >= 20.10.
+When done, you should see a new `dist/` folder inside `aiployee-bridge/`.
+Inside `dist/` there's a file called `mcp-server.js` — that's the
+compiled bridge. You don't need to do anything with it directly.
 
-### 2. One-time auth setup
+### Step 3. Get your AIployee session cookies from your browser
 
-The bridge authenticates with a bearer token taken from the `access_token`
-cookie on `aiployee.jobix.ai`.
+The bridge needs to log in to AIployee using **your existing login**.
+It does this by copying the cookies your browser already holds. You only
+do this once.
 
-**How to get the token (three steps):**
+**You need to copy FOUR cookie values out of your browser.** They are:
 
-1. Open `https://aiployee.jobix.ai` in any browser where you are already
-   logged in.
-2. Open DevTools (F12) -> Application -> Cookies -> `https://aiployee.jobix.ai`.
-3. Copy the value of the `access_token` cookie.
+| Cookie name | Where it's used | Required for |
+|---|---|---|
+| `access_token` | Bearer token for the JSON API | Flows, validation, activation, run-records, test-widget |
+| `PHPSESSID` | Yii session cookie | Agents, Custom Fields, Contacts |
+| `_identity` | Yii login token | Agents, Custom Fields, Contacts |
+| `_csrf` | Yii anti-forgery token | Agents, Custom Fields, Contacts |
 
-Then save it:
+If you only want to use the Flow tools you can stop after `access_token`,
+but copying all four takes the same amount of time and unlocks every
+feature.
+
+**How to find the cookies (Chrome, Edge, Brave, or any Chromium-based
+browser):**
+
+1. Open a new browser tab and go to https://aiployee.jobix.ai
+2. Make sure you are **logged in**. If you see the login page, sign in
+   first.
+3. Press the **F12** key. A panel opens at the bottom or side of the
+   browser — that's DevTools.
+4. At the top of the DevTools panel there's a row of tabs:
+   `Elements`, `Console`, `Sources`, `Network`, `Performance`, etc.
+   Look for the tab called **`Application`** (on some browsers it
+   might be under a `»` overflow menu).
+5. Click **`Application`**.
+6. In the left sidebar of the Application panel, find the section called
+   **`Storage`**, and under it **`Cookies`**. Click the small triangle
+   to expand `Cookies`, and click on `https://aiployee.jobix.ai`.
+7. A table appears in the main area showing every cookie. The columns
+   you care about are `Name` and `Value`.
+8. Find the row where `Name` is `access_token`. Click on the `Value`
+   cell. A long string of letters and numbers is selected. Copy it
+   (Ctrl+C or Cmd+C). Paste it somewhere temporary like a Notepad
+   window so you don't lose it.
+9. Repeat for `PHPSESSID`, `_identity`, and `_csrf`. You should end up
+   with four pasted values in your scratch document.
+
+**How to find the cookies (Firefox):** The DevTools layout is slightly
+different. Press F12, click the `Storage` tab (top of DevTools), expand
+`Cookies` in the left sidebar, click `https://aiployee.jobix.ai`. Same
+four cookies, same table.
+
+**How to find the cookies (Safari):** First enable the Develop menu
+(Safari > Settings > Advanced > "Show features for web developers").
+Then right-click anywhere on the page, choose `Inspect Element`, click
+the `Storage` tab, find `Cookies` in the sidebar.
+
+**Important — these cookies are like passwords.** Don't paste them into
+a chat, an email, a Slack message, a public document, or a screenshot
+you'll share. They give whoever holds them access to your AIployee
+account until they expire (typically a week for `_identity`). Keep them
+in a local Notepad/TextEdit window that you'll close after step 4.
+
+### Step 4. Save the cookies to the bridge
+
+Back in your terminal, in the `aiployee-bridge` folder, run this single
+command. Replace the four `PASTE-...-HERE` placeholders with the values
+you just copied. Keep the quotes around each value.
 
 ```sh
-node dist/mcp-server.js auth --token <paste-value-here>
-# or, if you have run `npm link` or installed globally:
-aiployee-bridge auth --token <paste-value-here>
+node dist/mcp-server.js auth \
+  --token "PASTE-access_token-HERE" \
+  --cookie PHPSESSID="PASTE-PHPSESSID-HERE" \
+  --cookie _identity="PASTE-_identity-HERE" \
+  --cookie _csrf="PASTE-_csrf-HERE"
 ```
 
-To override the API base URL (e.g. a sandbox tenant):
+**On Windows PowerShell**, replace the `\` line continuations with a
+backtick `` ` `` (or paste it all on one line):
+
+```powershell
+node dist/mcp-server.js auth `
+  --token "PASTE-access_token-HERE" `
+  --cookie PHPSESSID="PASTE-PHPSESSID-HERE" `
+  --cookie _identity="PASTE-_identity-HERE" `
+  --cookie _csrf="PASTE-_csrf-HERE"
+```
+
+You should see a message like `auth saved to /Users/you/.aiployee-bridge/auth.json`.
+The bridge stores the cookies in a file in your home directory with
+strict permissions (mode 0600 — only your user account can read it).
+
+You can now **close the Notepad/TextEdit window** where you pasted the
+cookie values. The bridge has them; you don't need them again until
+they expire.
+
+### Step 5. Connect the bridge to Claude Desktop
+
+Claude Desktop reads a JSON config file that tells it which MCP servers
+to start when it launches. You need to add `aiployee-bridge` to that
+config.
+
+**Find the config file:**
+
+| OS | File location |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+If the file doesn't exist yet, create it. Open it in any plain-text
+editor (TextEdit, Notepad, VS Code, etc.).
+
+**Get the absolute path to your bridge.** In your terminal, while inside
+the `aiployee-bridge` folder, run:
 
 ```sh
-node dist/mcp-server.js auth --token <value> --api-base https://sandbox-api.jobix.ai/v1
+# macOS / Linux:
+pwd
+
+# Windows PowerShell:
+(Get-Location).Path
 ```
 
-Credentials are stored at `~/.aiployee-bridge/auth.json` (mode 0600).
+The output is something like `/Users/you/aiployee-bridge` or
+`C:\Users\you\aiployee-bridge`. Copy that path.
 
-#### Cookie setup for Yii surfaces (Agents, Custom Fields, Contacts)
-
-The flow tools above hit only the JSON API and need just the bearer token.
-The Agent / Custom Field / Contact tools hit Yii form endpoints on
-`aiployee.jobix.ai` and require browser session cookies in addition to the
-token.
-
-1. Open `https://aiployee.jobix.ai` in a browser where you are logged in.
-2. Open DevTools (F12) -> Application -> Cookies -> `https://aiployee.jobix.ai`.
-3. Copy the values of `PHPSESSID`, `_identity`, and `_csrf`. Copy
-   `access_token` too if you haven't already saved it.
-4. Run one of:
-
-   ```sh
-   # Explicit flags (one per cookie)
-   aiployee-bridge auth \
-     --token <access_token-value> \
-     --cookie PHPSESSID=<value> \
-     --cookie _identity=<value> \
-     --cookie _csrf=<value>
-
-   # Or paste a curl "Cookie:" header directly (single-shot)
-   aiployee-bridge auth \
-     --token <access_token-value> \
-     --cookies-from-curl "PHPSESSID=...; _identity=...; _csrf=..."
-   ```
-
-Without cookies, only the Flows tools work. The Agent / Custom Field /
-Contact tools throw a clear `auth incomplete — re-run aiployee-bridge auth
-with --cookie flags` error.
-
-### 3. Wire into your MCP client
-
-Add an entry to `claude_desktop_config.json` (same pattern for Cursor,
-Windsurf, and Continue):
+**Edit `claude_desktop_config.json`** to contain:
 
 ```json
 {
   "mcpServers": {
     "aiployee-bridge": {
       "command": "node",
-      "args": ["/absolute/path/to/aiployee-bridge/dist/mcp-server.js"]
+      "args": ["/Users/you/aiployee-bridge/dist/mcp-server.js"]
     }
   }
 }
 ```
 
-Replace `/absolute/path/to/aiployee-bridge` with the directory where you
-cloned the repo. On Windows use forward slashes or escaped backslashes.
+Replace `/Users/you/aiployee-bridge` with the path you copied. **On
+Windows**, use forward slashes OR double-backslashes in the path:
 
-Restart the MCP client after editing the config.
+```json
+"args": ["C:/Users/you/aiployee-bridge/dist/mcp-server.js"]
+```
+
+If the file already had other MCP servers configured, add
+`"aiployee-bridge": { ... }` as a new entry inside `"mcpServers"`, with
+a comma after the previous entry.
+
+**Save the file and fully quit Claude Desktop** (Cmd+Q on macOS, right-click
+the system-tray icon and Quit on Windows). Reopen it. The bridge will
+start automatically the first time you open a conversation.
+
+### Step 6. Verify it works
+
+In a fresh Claude Desktop conversation, type:
+
+> What MCP tools do you have available from aiployee-bridge?
+
+Claude should list 17 tools (`list_flows`, `get_flow`, `update_flow`,
+`validate_flow`, `list_agents`, `get_agent`, `update_agent`,
+`list_phone_numbers`, `list_custom_fields`, `upsert_custom_field`,
+`delete_custom_field`, `get_contact`, `update_contact_attribute`,
+`set_flow_status`, `list_flow_runs`, `get_flow_run`, `run_flow_test`).
+
+Now try a read-only request to confirm the auth works end-to-end:
+
+> Use list_flows to show me all my AIployee flows.
+
+If you see a table of your real flow names, you're done. If you get an
+error mentioning "401" or "token", your cookies are wrong or expired —
+repeat step 3 with fresh values and re-run step 4.
+
+### Step 7. When cookies expire (every 1–7 days)
+
+The cookies your browser holds rotate. When the bridge stops working
+with a message like "401 Unauthorized" or "auth incomplete — re-run
+aiployee-bridge auth", just repeat **steps 3 and 4**. You don't need to
+rebuild or reconfigure Claude Desktop — only the `auth.json` file
+changes.
+
+---
+
+## Quick install (for developers)
+
+If you already have Node 20.10+, Git, and Claude Desktop set up:
+
+```sh
+git clone https://github.com/liamparker17/aiployee-bridge.git
+cd aiployee-bridge
+npm install && npm run build
+
+# Get access_token, PHPSESSID, _identity, _csrf cookie values from
+# https://aiployee.jobix.ai while logged in (DevTools → Application →
+# Cookies), then:
+node dist/mcp-server.js auth \
+  --token "<access_token>" \
+  --cookie PHPSESSID="<...>" \
+  --cookie _identity="<...>" \
+  --cookie _csrf="<...>"
+```
+
+Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "aiployee-bridge": {
+      "command": "node",
+      "args": ["/abs/path/to/aiployee-bridge/dist/mcp-server.js"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop.
+
+### Optional: sandbox / staging tenants
+
+Override the API base URL when calling `auth`:
+
+```sh
+node dist/mcp-server.js auth --token <value> --api-base https://sandbox-api.jobix.ai/v1
+```
+
+Without cookies, only the Flow tools work. Agent / Custom Field /
+Contact tools will throw `auth incomplete — re-run aiployee-bridge auth
+with --cookie flags`.
+
+### Using with other MCP clients (Cursor, Windsurf, Continue)
+
+The MCP config schema is the same; only the file location differs.
+Find the MCP-config file for your client (search the client's docs for
+"MCP" or "Model Context Protocol") and add the same
+`"aiployee-bridge"` entry. The bridge speaks standard MCP stdio JSON-RPC.
 
 ### 4. Use it
 
@@ -388,6 +605,129 @@ All tools return JSON serialised as a single MCP text content block.
   `api_request`, `ai_data_generation`. Flows containing these nodes round-trip
   safely (read and save preserve the original data opaquely), but local
   validation via `validate_flow` does not constrain their `data` block.
+
+## Design notes — patterns we recommend
+
+These are **patterns**, not features. The bridge doesn't enforce them; we
+describe them here because they're how we get the best results out of an
+LLM-driven AIployee tenant, and because the `set_flow_status` /
+`upsert_custom_field` / `update_agent` tools were designed with these
+patterns in mind.
+
+### Variable saturation: keep the master prompt slim
+
+An AIployee agent's `prompts` field is one big multi-line system prompt
+(observed lengths: 3 000 – 12 000 characters in production tenants). When
+you cram every conceivable business rule, exception, and edge case into
+that single string, three things go wrong:
+
+1. **Token cost compounds.** Every turn of every call replays the full
+   prompt to the underlying LLM provider. A 12 000-character prompt
+   times tens of thousands of monthly calls is real money.
+2. **Behaviour drifts.** Long prompts that mix unrelated rules cause the
+   LLM to blur them — the dietary-restriction policy starts contaminating
+   the cancellation flow because they live three paragraphs apart in the
+   same blob.
+3. **Editing becomes brittle.** Any change to the prompt risks regression
+   on unrelated behaviour; tests are slow because the only way to verify
+   is a real test call.
+
+**Variable saturation** is the pattern of pulling everything that *isn't*
+"how to talk" out of the prompt and into either:
+
+- **Custom Field attributes** (`{{ attributes.<slug> }}` in the prompt),
+  which the agent reads per-conversation at runtime — e.g.
+  `attributes.business_hours_today`, `attributes.menu_pdf_url`,
+  `attributes.last_known_booking_ref`.
+- **Knowledge documents** (`knowledge_text` / `knowledge_websites` /
+  `knowledge_files` on the agent), for RAG-retrievable long-form
+  reference material.
+- **External webhook results** (Webhook / `api_request` nodes), so the
+  agent can fetch live data on demand rather than carrying it as
+  embedded text.
+
+The master prompt then shrinks to its actual job: **identity, tone,
+constraints, escalation rules.** A target shape:
+
+```
+## IDENTITY
+You are Ellie, reservations host at L'Elixer...
+
+## TONE
+Warm, concise, never apologetic for being a machine...
+
+## ESCALATION
+If the customer asks for the owner, say "..." and transfer.
+
+## VARIABLES YOU MAY READ
+- {{ attributes.business_hours_today }}
+- {{ attributes.todays_special }}
+- {{ attributes.party_size_max_today }}
+```
+
+500 – 1 500 characters of prompt instead of 12 000, with the same
+behaviour because the variable values carry the data the prompt used to
+hard-code.
+
+The bridge supports this pattern directly: `list_custom_fields`,
+`upsert_custom_field`, and `update_contact_attribute` are the read /
+write tools for the variable layer; `update_agent({prompts: "..."})`
+edits the master prompt as plain text.
+
+### Context splitting by routing on attribute variables
+
+Once you have variables, you can split a single fat flow into multiple
+narrow flows and route to them based on attribute values, rather than
+shoving every branch into one agent's brain.
+
+The pattern:
+
+1. **One thin trigger flow** receives the inbound call and reads a
+   small handful of routing attributes (e.g. `attributes.customer_tier`,
+   `attributes.last_call_topic`).
+2. **A `filter` node** evaluates the attribute(s).
+3. **A `connect_call_agent` node per branch** hands off to a **different
+   agent**, each with its own focused prompt and its own narrow set of
+   variables.
+
+So instead of one "Tracey-master" agent whose 12 000-character prompt
+covers VIP customers, walk-ins, dietary restrictions, group bookings,
+private events, and complaints — you have:
+
+| Agent | Prompt size | Variables it reads | Triggered when |
+|---|---|---|---|
+| `Tracey-vip` | 1 200 chars | `attributes.vip_perks`, `attributes.preferred_table` | `customer_tier === "vip"` |
+| `Tracey-walkin` | 800 chars | `attributes.party_size_max_today` | `customer_tier === "new"` |
+| `Tracey-groups` | 1 400 chars | `attributes.private_event_calendar_url` | `last_call_topic === "private_event"` |
+| `Tracey-complaints` | 900 chars | `attributes.escalation_email` | `last_call_topic === "complaint"` |
+
+Each agent has dramatically less surface area, so its behaviour is
+**testable, auditable, and editable in isolation**. The trigger flow
+itself stays under 10 nodes and rarely changes.
+
+**Why this matters for the LLM building flows.** When you ask Claude to
+"add a VIP-handling path" it can:
+
+1. Call `list_custom_fields` to see whether a `customer_tier` attribute
+   already exists; if not, `upsert_custom_field({slug: "customer_tier",
+   type: "string", ...})`.
+2. Build or clone a focused `Tracey-vip` agent via `update_agent`.
+3. Modify the trigger flow to add a new `filter` branch + a new
+   `connect_call_agent` node pointing at the VIP agent — one `update_flow`
+   call.
+4. `set_flow_status` to flip it live.
+
+That's 3 – 4 MCP calls and produces a clean, narrow agent rather than
+bloating an existing prompt. The bridge's tool surface was designed
+around exactly this rhythm.
+
+### Why we mention it
+
+These are not features of `aiployee-bridge`; they are workflow patterns
+that the bridge's tool surface makes practical for the first time. If
+you're using the bridge and your agent prompts keep growing past
+~3 000 characters, that's the signal to push behaviour out into
+attributes and consider splitting the flow.
 
 ## Repo layout
 
