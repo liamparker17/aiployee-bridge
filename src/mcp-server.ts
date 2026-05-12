@@ -11,7 +11,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { Client } from "./client/index.js";
-import { listFlows, getFlow, updateFlow, validateFlowLocal, setFlowStatus } from "./tools/flows.js";
+import {
+  listFlows,
+  getFlow,
+  createFlow,
+  deleteFlow,
+  updateFlow,
+  validateFlowLocal,
+  setFlowStatus,
+  listNodeTypes,
+} from "./tools/flows.js";
 import { listAgents, getAgent, updateAgent } from "./tools/agents.js";
 import { listCustomFields, upsertCustomField, deleteCustomField } from "./tools/custom_fields.js";
 import { getContact, updateContactAttribute } from "./tools/contacts.js";
@@ -83,15 +92,61 @@ async function main(): Promise<void> {
     },
   );
 
+  // --- create_flow ---
+  server.tool(
+    "create_flow",
+    "Create a new empty flow. Returns {uuid, name}. After creating, call update_flow to populate the node graph. Name must be unique within the workspace.",
+    {
+      name: z.string().min(1, "name required"),
+      description: z.string().default(""),
+    },
+    async ({ name, description }) => {
+      try {
+        const result = await createFlow(client, name, description);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
   // --- update_flow ---
   server.tool(
     "update_flow",
-    "Validate and save a flow DTO. Returns {ok: true} on success.",
+    "Validate and save a flow DTO. Returns {ok: true} on success. Use create_flow first to get a uuid; then call this with the full FlowDTO (nodes + connections).",
     { flow: FlowDTO },
     async ({ flow }) => {
       try {
         await updateFlow(client, flow);
         return ok({ ok: true });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- delete_flow ---
+  server.tool(
+    "delete_flow",
+    "Delete a flow permanently by UUID. Active flows may need to be deactivated first via set_flow_status. Returns {ok: true, uuid}.",
+    { uuid: z.string().uuid() },
+    async ({ uuid }) => {
+      try {
+        const result = await deleteFlow(client, uuid);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- list_node_types ---
+  server.tool(
+    "list_node_types",
+    "Catalog of every node `type` value the bridge supports + the shape of its config/data block. Call this first when building a flow from scratch so you know what to put in each node's `config` field.",
+    async () => {
+      try {
+        return ok(listNodeTypes());
       } catch (err) {
         return fail(err);
       }

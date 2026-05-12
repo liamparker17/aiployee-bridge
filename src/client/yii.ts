@@ -143,6 +143,60 @@ export class YiiTransport {
   }
 
   /**
+   * POST to a Yii action URL that takes no form body — just CSRF +
+   * session cookies. Used by routes like /flows/<uuid>/delete which
+   * Yii renders as a `data-method="post"` link.
+   *
+   * Pulls a fresh CSRF token by GETting `csrfPath` (defaults to /flows,
+   * which is cheap and always available when the user is logged in).
+   * Returns { status, finalUrl } — 302 is the success signal for Yii.
+   */
+  async postWithCsrf(
+    path: string,
+    opts: { csrfPath?: string; body?: Record<string, string> } = {},
+  ): Promise<{ status: number; finalUrl: string }> {
+    if (!this.hasCookies()) {
+      throw new Error(
+        'auth incomplete — Yii cookies not configured; run `aiployee-bridge auth`',
+      );
+    }
+
+    const csrfPath = opts.csrfPath ?? "/flows";
+    const meta = await this.fetchHtml(csrfPath);
+    const csrfMatch = /<meta\s+name="csrf-token"\s+content="([^"]+)"/i.exec(meta.html);
+    if (!csrfMatch?.[1]) {
+      throw new Error(`postWithCsrf: csrf-token not found in ${csrfPath}`);
+    }
+    const csrfToken = csrfMatch[1];
+
+    const body = opts.body
+      ? new URLSearchParams({ ...opts.body, _csrf: csrfToken }).toString()
+      : new URLSearchParams({ _csrf: csrfToken }).toString();
+
+    const url = buildUrl(this.opts.yiiHost, path);
+    const res = await this.fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Cookie: this.cookieHeader(),
+        "X-CSRF-Token": csrfToken,
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "text/html",
+        Referer: this.opts.yiiHost,
+      },
+      body,
+      redirect: "manual",
+    });
+
+    if (res.status === 302) {
+      return { status: 302, finalUrl: res.headers.get("Location") ?? "" };
+    }
+    if (res.status === 200) {
+      return { status: 200, finalUrl: url };
+    }
+    throw new Error(`POST ${url} returned unexpected HTTP ${res.status}`);
+  }
+
+  /**
    * POST a merged form (urlencoded).
    * Returns { status, finalUrl, html } on 302 success.
    * Throws YiiFormError on 200 (validation failure).
