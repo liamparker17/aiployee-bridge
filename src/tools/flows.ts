@@ -191,28 +191,41 @@ export async function getFlow(
   uuid: string,
   meta?: Partial<FlowSummary>,
 ): Promise<FlowDTO> {
-  const wireNodes = await c.getFlowNodes(uuid);
-
-  let name: string;
-  let description: string;
-
+  // Resolve name up front from the list so the meta is correct even if
+  // the node-graph endpoint fails.
+  let name = "(unknown — name not recon'd)";
+  let description = "";
   if (meta !== undefined && typeof meta.name === "string") {
     name = meta.name;
-    description = "";
   } else {
-    // Try to resolve name from the list
     try {
       const flows = await listFlows(c);
       const found = flows.find((f) => f.uuid === uuid);
-      name = found?.name ?? "(unknown — name not recon'd)";
-      description = "";
+      if (found?.name) name = found.name;
     } catch {
-      name = "(unknown — name not recon'd)";
-      description = "";
+      // swallow — fall through with placeholder name
     }
   }
 
-  return fromWire({ uuid, name, description }, wireNodes);
+  // Try the REST node-graph endpoint. If it fails (server returns a Yii
+  // form error like "data_key required", a non-JSON HTML body, or a 404),
+  // degrade to a meta-only DTO so callers can still inspect / list flows
+  // without the call exploding. The description carries the failure so
+  // the LLM can surface it.
+  try {
+    const wireNodes = await c.getFlowNodes(uuid);
+    return fromWire({ uuid, name, description }, wireNodes);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return {
+      uuid,
+      name,
+      description:
+        `(node graph unavailable — GET /flows/${uuid}/nodes failed: ${reason.slice(0, 300)})`,
+      nodes: [],
+      connections: [],
+    };
+  }
 }
 
 /**
