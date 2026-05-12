@@ -13,8 +13,12 @@ export type Connection = z.infer<typeof Connection>;
 
 export const Socket = z.object({
   id: z.string(), // "ID_<number>_<i>" or "OD_<number>_<i>"
-  name: z.string().nullable(),
-  connections: z.array(Connection),
+  // Server sometimes returns null for unnamed sockets, sometimes omits it.
+  name: z.string().nullable().optional().default(null),
+  // Server omits `connections` entirely when the socket has none. Default
+  // to [] so the strict parser doesn't silently drop the whole node — that
+  // was the silent-truncation bug that made get_flow under-report by ~80%.
+  connections: z.array(Connection).optional().default([]),
 });
 export type Socket = z.infer<typeof Socket>;
 

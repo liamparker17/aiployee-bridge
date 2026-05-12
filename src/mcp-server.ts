@@ -21,6 +21,7 @@ import {
   setFlowStatus,
   listNodeTypes,
   connectNodes,
+  listNodes,
 } from "./tools/flows.js";
 import { listAgents, getAgent, updateAgent } from "./tools/agents.js";
 import { listCustomFields, upsertCustomField, deleteCustomField } from "./tools/custom_fields.js";
@@ -168,6 +169,26 @@ async function main(): Promise<void> {
       try {
         await updateFlow(client, flow);
         return ok({ ok: true });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- list_nodes ---
+  // Ground-truth manifest. get_flow's strict parser can silently drop
+  // nodes when a schema field doesn't match — list_nodes bypasses
+  // parsing entirely and returns every node the server has. Use this
+  // whenever you suspect "what I see in the UI" disagrees with what
+  // get_flow returned.
+  server.tool(
+    "list_nodes",
+    "Flat raw manifest of every node attached to a flow. No schema parsing — survives any current or future drift. Returns {uuid, type, number, name, status, inputs_count, outputs_count, raw} per node. Call this when get_flow's count looks wrong.",
+    { flow_uuid: z.string().uuid() },
+    async ({ flow_uuid }) => {
+      try {
+        const result = await listNodes(client, flow_uuid);
+        return ok(result);
       } catch (err) {
         return fail(err);
       }

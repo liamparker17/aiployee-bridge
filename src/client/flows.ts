@@ -15,6 +15,18 @@ export async function getFlowNodes(t: Transport, uuid: string): Promise<FlowNode
 }
 
 /**
+ * Raw passthrough fetch — returns whatever the server sent without any
+ * schema parsing. Use when the strict parser is dropping nodes you can
+ * see in the UI; this is the ground-truth read.
+ */
+export async function getFlowNodesRaw(t: Transport, uuid: string): Promise<unknown> {
+  return await t.request<unknown>({
+    method: "GET",
+    path: `/flows/${encodeURIComponent(uuid)}/nodes`,
+  });
+}
+
+/**
  * Create a single new node attached to an existing flow. The server
  * mints the node's UUID and `number`; the returned wire-node carries
  * them so callers can wire connections against the real identity.

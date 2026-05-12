@@ -180,7 +180,8 @@ already-saved nodes; it isn't a node creator.
 | MCP tool | Wire call |
 |---|---|
 | `list_flows` | REST `GET /v1/flows` (404 → Yii HTML scrape of `/flows`) |
-| `get_flow` | REST `GET /v1/flows/<uuid>/nodes` (graceful degrade to meta-only on failure) |
+| `get_flow` | REST `GET /v1/flows/<uuid>/nodes` → parse → FlowDTO. If the parser drops any node the count + reasons are encoded into `description` |
+| `list_nodes` | REST `GET /v1/flows/<uuid>/nodes` raw passthrough — no parsing. Use as ground truth when get_flow looks off |
 | `create_flow` | Yii `POST /flows/create` (SaveFlowForm) |
 | `delete_flow` | Yii `POST /flows/<uuid>/delete` (CSRF, no body) |
 | `update_flow` | REST `POST /v1/nodes/save` (existing UUIDs only) |
@@ -210,11 +211,19 @@ weird":
 2. **`parseFlowNode`** falls back from strict to permissive when the
    strict zod schema misses.
 3. **`parseFlowNodesResult`** and **`fromWire`** both wrap each node in
-   try/catch and drop unrecognised ones with a `console.warn` rather
-   than throwing. `validate_flow` is the place to flag drift.
+   try/catch and drop unrecognised ones. `validate_flow` is the place
+   to flag drift.
 
-If you tighten any of these, ensure the per-flow descriptor in
-`description` still surfaces the failure reason to the LLM.
+**Critical lesson learned (v0.2.0):** `console.warn` is invisible to
+the LLM (it goes to stderr; the MCP tool result only carries stdout-
+equivalent JSON). When parsers silently drop nodes via `console.warn`,
+the LLM thinks the flow is empty/partial when it isn't — and then
+creates duplicates. **Drops must surface in the tool response.**
+
+Current implementation: `get_flow` encodes the drop count + per-node
+reasons into the FlowDTO's `description` field with a `[WARN]` prefix,
+and `list_nodes` exists as a parser-free ground-truth read. If you
+tighten the parsers further, keep both routes intact.
 
 ## The diag/ pattern
 

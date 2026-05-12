@@ -1,7 +1,7 @@
 import { DEFAULT_API_BASE, DEFAULT_YII_HOST, loadAuth } from "./auth.js";
 import { Transport, type TransportOptions } from "./transport.js";
 import { YiiTransport, type YiiTransportOptions } from "./yii.js";
-import { getFlowNodes, saveFlow, createNode, updateNode, deleteNode } from "./flows.js";
+import { getFlowNodes, getFlowNodesRaw, saveFlow, createNode, updateNode, deleteNode } from "./flows.js";
 import {
   listAgentsDropdown,
   listActionsDropdown,
@@ -136,6 +136,10 @@ export class Client {
   // --- Flows ---
   getFlowNodes(uuid: string): Promise<FlowNode[]> {
     return getFlowNodes(this.transport, uuid);
+  }
+
+  getFlowNodesRaw(uuid: string): Promise<unknown> {
+    return getFlowNodesRaw(this.transport, uuid);
   }
 
   saveFlow(req: SaveFlowRequest): Promise<void> {

@@ -15,26 +15,56 @@ export type SaveFlowRequest = z.infer<typeof SaveFlowRequest>;
 export const FlowNodesResult = z.array(FlowNode);
 export type FlowNodesResult = z.infer<typeof FlowNodesResult>;
 
+export interface FlowNodesParseResult {
+  nodes: FlowNode[];
+  /**
+   * Nodes the parser couldn't validate. They are kept here as raw
+   * payloads so callers (and the LLM) can see them — never silently
+   * dropped. Inspect via list_nodes if you need to operate on these.
+   */
+  dropped: Array<{
+    uuid: string | null;
+    type: string | null;
+    number: number | null;
+    reason: string;
+    raw: unknown;
+  }>;
+}
+
 export function parseFlowNodesResult(input: unknown): FlowNode[] {
+  return parseFlowNodesResultDetailed(input).nodes;
+}
+
+/**
+ * Same as parseFlowNodesResult but also surfaces every node the parser
+ * couldn't validate. get_flow uses this to encode drop counts into the
+ * FlowDTO description so the LLM can never assume an empty/partial
+ * graph is the source of truth without first checking.
+ */
+export function parseFlowNodesResultDetailed(input: unknown): FlowNodesParseResult {
   if (!Array.isArray(input)) {
     throw new Error("expected array of nodes");
   }
-  // Per-node tolerance: one malformed node must not nuke the whole flow.
-  // Bad nodes are skipped with a single warning; callers still see the
-  // rest of the graph and can drill into specifics via validate_flow.
-  const out: FlowNode[] = [];
+  const nodes: FlowNode[] = [];
+  const dropped: FlowNodesParseResult["dropped"] = [];
   for (let i = 0; i < input.length; i++) {
     try {
-      out.push(parseFlowNode(input[i]));
+      nodes.push(parseFlowNode(input[i]));
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       const raw = input[i];
-      const ref =
-        raw && typeof raw === "object" && "uuid" in raw
-          ? (raw as { uuid: unknown }).uuid
-          : `index ${i}`;
-      console.warn(`[aiployee-bridge] dropping node ${String(ref)}: ${reason.slice(0, 200)}`);
+      const o = (raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {}) as Record<
+        string,
+        unknown
+      >;
+      dropped.push({
+        uuid: typeof o.uuid === "string" ? o.uuid : null,
+        type: typeof o.type === "string" ? o.type : null,
+        number: typeof o.number === "number" ? o.number : null,
+        reason: reason.slice(0, 400),
+        raw,
+      });
     }
   }
-  return out;
+  return { nodes, dropped };
 }

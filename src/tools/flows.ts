@@ -12,6 +12,7 @@ import type { FlowDTO } from "../dto.js";
 import type { ValidationIssue } from "../validate.js";
 import { validateFlow } from "../validate.js";
 import { fromWire, toWire } from "../normalize.js";
+import { parseFlowNodesResultDetailed } from "../schema/flow.js";
 
 export interface FlowSummary {
   uuid: string;
@@ -711,14 +712,31 @@ export async function getFlow(
     }
   }
 
-  // Try the REST node-graph endpoint. If it fails (server returns a Yii
-  // form error like "data_key required", a non-JSON HTML body, or a 404),
-  // degrade to a meta-only DTO so callers can still inspect / list flows
-  // without the call exploding. The description carries the failure so
-  // the LLM can surface it.
+  // Try the REST node-graph endpoint. Three failure modes:
+  //   1. Network/HTTP error → degrade to meta-only DTO
+  //   2. Strict parser drops nodes → surface the drop count in `description`
+  //      so the LLM never assumes "2 nodes returned" means "2 nodes exist"
+  //   3. fromWire drops nodes (unknown type / bad shape) → same treatment
   try {
-    const wireNodes = await c.getFlowNodes(uuid);
-    return fromWire({ uuid, name, description }, wireNodes);
+    const raw = await c.getFlowNodesRaw(uuid);
+    const detailed = parseFlowNodesResultDetailed(raw);
+    const dto = fromWire({ uuid, name, description }, detailed.nodes);
+
+    const expectedCount = Array.isArray(raw) ? raw.length : detailed.nodes.length;
+    const returnedCount = dto.nodes.length;
+    if (expectedCount !== returnedCount || detailed.dropped.length > 0) {
+      const dropSummaries = detailed.dropped
+        .map((d) => `  - ${d.uuid ?? "(no uuid)"} type=${d.type} number=${d.number}: ${d.reason}`)
+        .join("\n");
+      const downstreamDropped = expectedCount - returnedCount - detailed.dropped.length;
+      dto.description =
+        `[WARN] server returned ${expectedCount} nodes; bridge parsed ${returnedCount}. ` +
+        `${detailed.dropped.length} dropped by schema, ${downstreamDropped} by fromWire. ` +
+        `Use list_nodes(${uuid}) for the raw passthrough view.` +
+        (dropSummaries ? `\n${dropSummaries}` : "") +
+        (description ? `\n${description}` : "");
+    }
+    return dto;
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return {
@@ -730,6 +748,56 @@ export async function getFlow(
       connections: [],
     };
   }
+}
+
+/**
+ * Ground-truth flat manifest of every node the server has for a flow.
+ *
+ * Returns the raw wire shape from /v1/flows/<uuid>/nodes with NO schema
+ * parsing, so it survives any current or future schema drift. Use this
+ * whenever you suspect get_flow is under-reporting (it can, if the
+ * strict zod schemas miss a new field shape — they degrade per-node
+ * with a warning that the LLM can't see otherwise).
+ *
+ * Returns one entry per node with the most-useful identification fields
+ * plus the raw payload. Sorted by node `number` ascending.
+ */
+export async function listNodes(c: Client, flowUuid: string): Promise<
+  Array<{
+    uuid: string;
+    type: string;
+    number: number;
+    name: string;
+    status: number;
+    inputs_count: number;
+    outputs_count: number;
+    raw: unknown;
+  }>
+> {
+  const raw = await c.getFlowNodesRaw(flowUuid);
+  if (!Array.isArray(raw)) {
+    throw new Error("listNodes: server did not return an array");
+  }
+  const entries = raw.map((n: unknown) => {
+    const o = (n && typeof n === "object" ? (n as Record<string, unknown>) : {}) as Record<
+      string,
+      unknown
+    >;
+    const inputs = Array.isArray(o.inputs) ? o.inputs : [];
+    const outputs = Array.isArray(o.outputs) ? o.outputs : [];
+    return {
+      uuid: typeof o.uuid === "string" ? o.uuid : "",
+      type: typeof o.type === "string" ? o.type : "",
+      number: typeof o.number === "number" ? o.number : -1,
+      name: typeof o.name === "string" ? o.name : "",
+      status: typeof o.status === "number" ? o.status : -1,
+      inputs_count: inputs.length,
+      outputs_count: outputs.length,
+      raw: n,
+    };
+  });
+  entries.sort((a, b) => a.number - b.number);
+  return entries;
 }
 
 /**
