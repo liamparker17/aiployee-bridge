@@ -13,6 +13,7 @@ import type { ValidationIssue } from "../validate.js";
 import { validateFlow } from "../validate.js";
 import { fromWire, toWire } from "../normalize.js";
 import { parseFlowNodesResultDetailed } from "../schema/flow.js";
+import type { FlowNode } from "../schema/node.js";
 
 export interface FlowSummary {
   uuid: string;
@@ -632,13 +633,17 @@ export function socketId(direction: "input" | "output", nodeNumber: number, inde
 /**
  * Wire a single connection between two existing nodes.
  *
- * Reads the current flow state, mutates one output socket's connections
- * array, then POSTs /v1/nodes/save. Idempotent — re-running with the
- * same args is a no-op.
+ * Sends the change as a `PUT /v1/nodes/<from_uuid>` rather than a bulk
+ * `POST /v1/nodes/save`. The bulk endpoint deletes-and-recreates every
+ * node it receives, which mints fresh UUIDs for the source — forcing
+ * callers to re-fetch list_nodes between every connect call. The
+ * single-node PUT keeps the from-node's identity stable.
  *
- * Use this for incremental wiring instead of building a full FlowDTO
- * and calling update_flow. The bridge handles socket-id lookup so the
- * caller never has to construct "OD_3_1" strings.
+ * If the server still rotates the UUID for some reason, the new value
+ * is surfaced in `new_from_node_uuid` so callers can chain without
+ * relisting. Target nodes have always been stable.
+ *
+ * Idempotent — re-running with the same args is a no-op.
  */
 export async function connectNodes(
   c: Client,
@@ -649,46 +654,136 @@ export async function connectNodes(
     to_node_uuid: string;
     to_input_index?: number; // default 0
   },
-): Promise<{ ok: true; from_socket: string; to_socket: string }> {
+): Promise<{
+  ok: true;
+  from_socket: string;
+  to_socket: string;
+  new_from_node_uuid: string;
+  uuid_rotated: boolean;
+}> {
   const toInputIndex = args.to_input_index ?? 0;
-  const nodes = await c.getFlowNodes(args.flow_uuid);
-
-  const fromNode = nodes.find((n) => n.uuid === args.from_node_uuid);
-  const toNode = nodes.find((n) => n.uuid === args.to_node_uuid);
-  if (!fromNode) throw new Error(`connectNodes: from_node_uuid ${args.from_node_uuid} not found in flow`);
-  if (!toNode) throw new Error(`connectNodes: to_node_uuid ${args.to_node_uuid} not found in flow`);
-
-  const fromOutput = fromNode.outputs[args.from_output_index];
-  if (!fromOutput) {
-    throw new Error(
-      `connectNodes: source node has no output #${args.from_output_index} (it has ${fromNode.outputs.length} outputs)`,
+  const result = await mutateSourceConnections(c, args.flow_uuid, args.from_node_uuid, (outputs, toNode) => {
+    const fromOutput = outputs[args.from_output_index];
+    if (!fromOutput) {
+      throw new Error(
+        `connectNodes: source node has no output #${args.from_output_index} (it has ${outputs.length} outputs)`,
+      );
+    }
+    const toInput = toNode.inputs[toInputIndex];
+    if (!toInput) {
+      throw new Error(
+        `connectNodes: target node has no input #${toInputIndex} (it has ${toNode.inputs.length} inputs)`,
+      );
+    }
+    const already = fromOutput.connections.some(
+      (c) => c.node_number === toNode.number && c.node_socket === toInput.id,
     );
-  }
+    if (!already) {
+      fromOutput.connections.push({ node_number: toNode.number, node_socket: toInput.id });
+    }
+    return { from_socket: fromOutput.id, to_socket: toInput.id };
+  }, args.to_node_uuid);
+  return { ok: true, ...result };
+}
 
-  const toInput = toNode.inputs[toInputIndex];
-  if (!toInput) {
-    throw new Error(
-      `connectNodes: target node has no input #${toInputIndex} (it has ${toNode.inputs.length} inputs)`,
-    );
-  }
-
-  // Idempotent: skip if the connection already exists.
-  const already = fromOutput.connections.some(
-    (c) => c.node_number === toNode.number && c.node_socket === toInput.id,
+/**
+ * Remove a single connection between two nodes (surgical edge delete).
+ * Same wire mechanics as connect_nodes — single-node PUT, returns the
+ * new from-node UUID if the server rotated it.
+ *
+ * Pass `from_output_index` to scope the removal to one output socket,
+ * or omit it to remove every connection from any output of the source
+ * node that targets the given to-node.
+ */
+export async function disconnectNodes(
+  c: Client,
+  args: {
+    flow_uuid: string;
+    from_node_uuid: string;
+    to_node_uuid: string;
+    from_output_index?: number; // optional — scope to one output
+  },
+): Promise<{
+  ok: true;
+  removed: Array<{ from_socket: string; to_socket: string }>;
+  new_from_node_uuid: string;
+  uuid_rotated: boolean;
+}> {
+  const result = await mutateSourceConnections(
+    c,
+    args.flow_uuid,
+    args.from_node_uuid,
+    (outputs, toNode) => {
+      const removed: Array<{ from_socket: string; to_socket: string }> = [];
+      const targetIndices =
+        args.from_output_index !== undefined
+          ? [args.from_output_index]
+          : outputs.map((_, i) => i);
+      for (const i of targetIndices) {
+        const out = outputs[i];
+        if (!out) continue;
+        out.connections = out.connections.filter((c) => {
+          const matches = c.node_number === toNode.number;
+          if (matches) removed.push({ from_socket: out.id, to_socket: c.node_socket });
+          return !matches;
+        });
+      }
+      return { removed };
+    },
+    args.to_node_uuid,
   );
-  if (!already) {
-    fromOutput.connections.push({ node_number: toNode.number, node_socket: toInput.id });
-  }
+  return {
+    ok: true,
+    removed: result.removed,
+    new_from_node_uuid: result.new_from_node_uuid,
+    uuid_rotated: result.uuid_rotated,
+  };
+}
 
-  // POST the full graph back. saveFlow expects SaveFlowRequest shape.
-  await c.saveFlow({
-    flow_uuid: args.flow_uuid,
-    flow_name: "", // server retains existing name when blank
-    flow_description: "",
-    nodes,
-  });
+/**
+ * Shared mechanic for connect/disconnect: read the source node, let the
+ * caller mutate its outputs in place, PUT it back as a single-node
+ * update. Surfaces UUID rotation if the server changes it.
+ */
+async function mutateSourceConnections<T>(
+  c: Client,
+  flowUuid: string,
+  fromNodeUuid: string,
+  mutate: (outputs: FlowNode["outputs"], toNode: FlowNode) => T,
+  toNodeUuid: string,
+): Promise<T & { new_from_node_uuid: string; uuid_rotated: boolean }> {
+  const nodes = await c.getFlowNodes(flowUuid);
+  const fromNode = nodes.find((n) => n.uuid === fromNodeUuid);
+  const toNode = nodes.find((n) => n.uuid === toNodeUuid);
+  if (!fromNode) throw new Error(`mutateSourceConnections: from ${fromNodeUuid} not found`);
+  if (!toNode) throw new Error(`mutateSourceConnections: to ${toNodeUuid} not found`);
 
-  return { ok: true, from_socket: fromOutput.id, to_socket: toInput.id };
+  const mutateResult = mutate(fromNode.outputs, toNode);
+
+  // Single-node PUT. We must include flow_uuid in the body (server
+  // returns "Flow not found" otherwise — see update_node tool).
+  const response = (await c.updateNode(fromNode.uuid, {
+    flow_uuid: flowUuid,
+    name: fromNode.name,
+    type: fromNode.type,
+    status: fromNode.status,
+    number: fromNode.number,
+    position: fromNode.position,
+    inputs: fromNode.inputs,
+    outputs: fromNode.outputs,
+    data: fromNode.data,
+  })) as { uuid?: string } | unknown;
+
+  const newUuid =
+    response && typeof response === "object" && "uuid" in response && typeof (response as { uuid: unknown }).uuid === "string"
+      ? (response as { uuid: string }).uuid
+      : fromNodeUuid;
+
+  return {
+    ...mutateResult,
+    new_from_node_uuid: newUuid,
+    uuid_rotated: newUuid !== fromNodeUuid,
+  };
 }
 
 export async function getFlow(
@@ -762,7 +857,11 @@ export async function getFlow(
  * Returns one entry per node with the most-useful identification fields
  * plus the raw payload. Sorted by node `number` ascending.
  */
-export async function listNodes(c: Client, flowUuid: string): Promise<
+export async function listNodes(
+  c: Client,
+  flowUuid: string,
+  opts: { brief?: boolean } = {},
+): Promise<
   Array<{
     uuid: string;
     type: string;
@@ -771,7 +870,7 @@ export async function listNodes(c: Client, flowUuid: string): Promise<
     status: number;
     inputs_count: number;
     outputs_count: number;
-    raw: unknown;
+    raw?: unknown;
   }>
 > {
   const raw = await c.getFlowNodesRaw(flowUuid);
@@ -785,7 +884,16 @@ export async function listNodes(c: Client, flowUuid: string): Promise<
     >;
     const inputs = Array.isArray(o.inputs) ? o.inputs : [];
     const outputs = Array.isArray(o.outputs) ? o.outputs : [];
-    return {
+    const entry: {
+      uuid: string;
+      type: string;
+      number: number;
+      name: string;
+      status: number;
+      inputs_count: number;
+      outputs_count: number;
+      raw?: unknown;
+    } = {
       uuid: typeof o.uuid === "string" ? o.uuid : "",
       type: typeof o.type === "string" ? o.type : "",
       number: typeof o.number === "number" ? o.number : -1,
@@ -793,8 +901,9 @@ export async function listNodes(c: Client, flowUuid: string): Promise<
       status: typeof o.status === "number" ? o.status : -1,
       inputs_count: inputs.length,
       outputs_count: outputs.length,
-      raw: n,
     };
+    if (!opts.brief) entry.raw = n;
+    return entry;
   });
   entries.sort((a, b) => a.number - b.number);
   return entries;

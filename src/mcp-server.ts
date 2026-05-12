@@ -21,6 +21,7 @@ import {
   setFlowStatus,
   listNodeTypes,
   connectNodes,
+  disconnectNodes,
   listNodes,
 } from "./tools/flows.js";
 import { listAgents, getAgent, updateAgent } from "./tools/agents.js";
@@ -183,11 +184,14 @@ async function main(): Promise<void> {
   // get_flow returned.
   server.tool(
     "list_nodes",
-    "Flat raw manifest of every node attached to a flow. No schema parsing — survives any current or future drift. Returns {uuid, type, number, name, status, inputs_count, outputs_count, raw} per node. Call this when get_flow's count looks wrong.",
-    { flow_uuid: z.string().uuid() },
-    async ({ flow_uuid }) => {
+    "Flat manifest of every node in a flow — survives schema drift. Default returns {uuid, type, number, name, status, inputs_count, outputs_count, raw}; pass brief: true to drop the raw payload (cuts response size ~10x — useful when re-fetching after each connect_nodes).",
+    {
+      flow_uuid: z.string().uuid(),
+      brief: z.boolean().default(false),
+    },
+    async ({ flow_uuid, brief }) => {
       try {
-        const result = await listNodes(client, flow_uuid);
+        const result = await listNodes(client, flow_uuid, { brief });
         return ok(result);
       } catch (err) {
         return fail(err);
@@ -248,7 +252,7 @@ async function main(): Promise<void> {
   // --- connect_nodes ---
   server.tool(
     "connect_nodes",
-    "Wire a single connection between two existing nodes. Bridge fetches current state, mutates the source output socket's connections array, and saves. Idempotent. Use this for incremental wiring instead of assembling a full FlowDTO. Socket IDs are computed automatically — pass output INDEX (0=first output, e.g. Completed; 1=second, e.g. Transferred or False) not the OD_N_M string.",
+    "Wire one connection between two existing nodes. Issues a single-node PUT (not bulk save) so the source UUID stays stable. Idempotent. Pass output INDEX (0=Completed, 1=Transferred/False) — socket IDs computed automatically. Response includes new_from_node_uuid + uuid_rotated; chain calls without re-listing when uuid_rotated is false.",
     {
       flow_uuid: z.string().uuid(),
       from_node_uuid: z.string().uuid(),
@@ -259,6 +263,33 @@ async function main(): Promise<void> {
     async (args) => {
       try {
         const result = await connectNodes(client, args);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- disconnect_nodes ---
+  server.tool(
+    "disconnect_nodes",
+    "Surgical edge removal between two nodes. Pass from_output_index to scope to one output socket, or omit to remove every connection from this source to this target. Returns the removed sockets plus new_from_node_uuid (same stability behaviour as connect_nodes).",
+    {
+      flow_uuid: z.string().uuid(),
+      from_node_uuid: z.string().uuid(),
+      to_node_uuid: z.string().uuid(),
+      from_output_index: z.number().int().min(0).optional(),
+    },
+    async (args) => {
+      try {
+        const result = await disconnectNodes(client, {
+          flow_uuid: args.flow_uuid,
+          from_node_uuid: args.from_node_uuid,
+          to_node_uuid: args.to_node_uuid,
+          ...(args.from_output_index !== undefined
+            ? { from_output_index: args.from_output_index }
+            : {}),
+        });
         return ok(result);
       } catch (err) {
         return fail(err);
