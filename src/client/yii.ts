@@ -112,6 +112,37 @@ export class YiiTransport {
   }
 
   /**
+   * GET an arbitrary Yii-served HTML page with cookie auth.
+   * Returns { status, html, finalUrl } — does NOT parse forms.
+   * Use this for listing pages (e.g. /calls) that are not ActiveForms.
+   * Throws when cookies are absent or the response is not 2xx.
+   */
+  async fetchHtml(path: string): Promise<{ status: number; html: string; finalUrl: string }> {
+    if (!this.hasCookies()) {
+      throw new Error(
+        'auth incomplete — Yii cookies not configured; run `aiployee-bridge auth`',
+      );
+    }
+
+    const url = buildUrl(this.opts.yiiHost, path);
+    const res = await this.fetchImpl(url, {
+      method: "GET",
+      headers: {
+        Cookie: this.cookieHeader(),
+        Accept: "text/html",
+      },
+      redirect: "follow",
+    });
+
+    if (!res.ok) {
+      throw new Error(`GET ${url} returned HTTP ${res.status}`);
+    }
+
+    const html = await res.text();
+    return { status: res.status, html, finalUrl: res.url ?? url };
+  }
+
+  /**
    * POST a merged form (urlencoded).
    * Returns { status, finalUrl, html } on 302 success.
    * Throws YiiFormError on 200 (validation failure).
