@@ -575,11 +575,22 @@ below before you let an LLM activate live numbers.
 
 ## Tools exposed
 
+The bridge groups its tools into four domains: **flow lifecycle** (create /
+read / activate / delete whole flows), **node CRUD** (build a flow node by
+node, then wire it up), **reference data** (agents, phone numbers, custom
+fields, contacts), and **observability** (flow runs, transcripts, test
+widgets). The flow-authoring tools landed across v0.1.6 → v0.2.0 — see
+**What's new** at the bottom of this section.
+
+### Flow lifecycle
+
 | Tool | Arguments | Returns |
 |------|-----------|---------|
 | `list_flows` | _(none)_ | Array of flow summaries (uuid, name, status, …) |
-| `get_flow` | `uuid: string (UUID)` | Full flow DTO including nodes and edges |
-| `update_flow` | `flow: FlowDTO` | `{ok: true}` on success; throws `ApiError` on failure |
+| `get_flow` | `uuid: string (UUID)` | Full flow DTO including nodes and edges. If the schema parser drops any node, the count + reasons are prefixed into `description` as `[WARN] …` — never silently truncates |
+| `create_flow` | `name: string, description?: string` | `{uuid, name}` — empty flow shell. Name must be unique in the workspace |
+| `update_flow` | `flow: FlowDTO` | `{ok: true}` on success; throws `ApiError` on failure. **Only edits existing nodes** — use `create_node` to mint new ones first |
+| `delete_flow` | `uuid: string (UUID)` | `{ok: true, uuid}`. Deactivate first if the flow is Active |
 | `validate_flow` | `flow: FlowDTO` | Array of `ValidationIssue` objects; empty array = no issues |
 | `list_agents` | _(none)_ | Array of agent records (uuid, label, …) |
 | `list_phone_numbers` | _(none)_ | Object with `inbound`, `outbound`, and `human_agent` arrays |
@@ -595,7 +606,58 @@ below before you let an LLM activate live numbers.
 | `get_flow_run` | `{uuid}` | `FlowRunDetail` = summary + `transcript`, optional `nodePath`, free-form `metadata`; parsed from `/calls/<uuid>/details` |
 | `run_flow_test` | `{flowUuid}` | `{widgetUrl, hint}` — open the URL in a browser to run a test conversation; the bridge cannot drive the chat headlessly |
 
+### Node CRUD — build flows from scratch
+
+`update_flow` posts to `/v1/nodes/save`, which **only accepts node UUIDs
+that already exist server-side** (synthetic UUIDs return "Node with this
+uuid not found"). To author a brand-new flow the LLM has to mint each
+node first, collect the server-assigned UUID, then wire connections.
+
+| Tool | Arguments | Returns |
+|------|-----------|---------|
+| `list_node_types` | _(none)_ | Catalog of all 14 supported node types with concrete `create_node` payload examples, output min/max, required data keys, and gotchas. **Call this first** when building from scratch |
+| `list_nodes` | `flow_uuid: string (UUID)` | Raw passthrough manifest of every node attached to a flow. No schema parsing — survives any drift. Ground-truth read when `get_flow` looks suspicious |
+| `create_node` | `body: object` | New wire-node with server-minted `uuid` and `number`. `outputs`/`inputs` accept either full socket objects or bare label strings (`["Completed", "Transferred"]`) — bridge auto-fills `OD_N_M` / `ID_N_M` socket ids |
+| `update_node` | `uuid: string (UUID), body: object` | Updated wire-node. **`body.flow_uuid` is required** (server's "Flow not found" error fires misleadingly if it's missing — the bridge surfaces a clear message). Use for rich filter rules that `create_node` rejects |
+| `delete_node` | `uuid: string (UUID)` | `{ok: true}`. Connections referencing the node are cleaned up server-side |
+| `connect_nodes` | `{flow_uuid, from_node_uuid, from_output_index, to_node_uuid, to_input_index?}` | `{ok: true, from_socket, to_socket}`. Idempotent. Bridge computes socket ids from indices — pass `0`/`1` not `OD_3_1` strings |
+
+**Recommended authoring workflow:**
+
+1. `list_node_types` → copy the payload example for each node you need
+2. `list_agents`, `list_phone_numbers`, `list_custom_fields` → grab real UUIDs/slugs
+3. `create_flow(name)` → `flow_uuid`
+4. `create_node` × N → collect minted node UUIDs
+5. `update_node` for nodes with rich shapes that `create_node` rejects (filter rules)
+6. `connect_nodes` × M → wire one edge at a time, idempotent
+7. `run_flow_test` → sanity check
+8. `set_flow_status(uuid, "Active", confirm: <exact name>)` → ship
+
 All tools return JSON serialised as a single MCP text content block.
+
+### What's new since v0.1.0
+
+- **v0.2.0** — `get_flow` no longer silently under-reports the node graph.
+  The `Socket` schema required `connections: array` but the server omits
+  the key when a socket has no connections; the strict parser dropped
+  ~80% of real-world nodes to `console.warn` (invisible to the LLM).
+  Fixed plus added `list_nodes` raw passthrough as ground truth.
+- **v0.1.9** — `list_node_types` now returns concrete create payloads
+  and gotchas per type (vs. freeform prose), `create_node` auto-fills
+  socket IDs from bare label strings, new `connect_nodes` for idempotent
+  one-edge wiring, `update_node` validates `flow_uuid` client-side,
+  errors pass `ApiError.errors` / `httpStatus` / `endpoint` through verbatim.
+- **v0.1.8** — `create_node` / `update_node` / `delete_node` MCP tools.
+  `update_flow` can't mint nodes; these can.
+- **v0.1.7** — `create_flow` / `delete_flow` / `list_node_types`.
+- **v0.1.6** — schema tolerance: `get_flow` survives unknown node types
+  and missing optional fields (further hardened in v0.2.0).
+- **v0.1.4** — `list_flows` HTML fallback parses name + status + modified
+  time from the Yii grid rows (was returning placeholder names).
+- **v0.1.3** — `list_flows` Yii HTML fallback uses the full session cookie
+  jar via `YiiTransport`; was failing auth and returning `[]`.
+- **v0.1.2** — installer wire-claude bugfix.
+- **v0.1.1** — GitHub Releases publishing for installer binaries.
 
 ## Failure modes worth knowing
 
@@ -650,11 +712,26 @@ All tools return JSON serialised as a single MCP text content block.
   node" error.
 
 - **Permissive node types.** Eleven node types fall through to a `RawConfig`
-  catch-all until their `data` shapes are fully documented: `internet_call`,
-  `event`, `now`, `split`, `delay`, `filter`, `update_data`, `sms`, `email`,
-  `api_request`, `ai_data_generation`. Flows containing these nodes round-trip
-  safely (read and save preserve the original data opaquely), but local
-  validation via `validate_flow` does not constrain their `data` block.
+  catch-all because their `data` shapes aren't covered by strict zod schemas:
+  `internet_call`, `event`, `now`, `split`, `delay`, `filter`, `update_data`,
+  `sms`, `email`, `api_request`, `ai_data_generation`. Flows containing these
+  nodes round-trip safely (read and save preserve the original data opaquely),
+  but local validation via `validate_flow` does not constrain their `data`
+  block. **For authoring** these types, call `list_node_types` — the catalog
+  carries a working create payload example, output min/max, required data
+  keys, and per-type gotchas (e.g. `connect_call_agent.connect_agent_params
+  .type` ∈ {"ai", "real"} not `agent_type`; filter rich rules go via
+  `update_node` not `create_node`; `sms` needs a tenant-configured
+  `provider_slug`).
+
+- **`get_flow` parser drops surface in `description`.** If any node fails
+  strict-schema parse the bridge keeps it out of the `nodes` array but
+  prefixes the FlowDTO description with `[WARN] server returned N nodes;
+  bridge parsed M…` plus per-node drop reasons. **Never assume the
+  parsed count is authoritative** — call `list_nodes(flow_uuid)` for the
+  raw passthrough manifest when the count looks wrong. This was the
+  bug that made the bridge look empty for flows with no-connection
+  sockets prior to v0.2.0.
 
 ## Design notes — patterns we recommend
 
@@ -921,8 +998,10 @@ attributes and consider splitting the flow.
 ## Repo layout
 
 ```
+CLAUDE.md              — engineering / how-to-continue notes for AI assistants
+CODEBASE.md            — one-screen repo manifest (read first for orientation)
 src/
-  mcp-server.ts        — stdio MCP server entry point; registers all 17 tools
+  mcp-server.ts        — stdio MCP server entry point; registers all tools
   auth-cli.ts          — `aiployee-bridge auth` subcommand (the ONLY CLI command)
   index.ts             — library entrypoint when used as a Node module
   client/
@@ -948,7 +1027,10 @@ tests/
   *.test.ts            — node:test unit tests (no network; injected fetchImpl)
   integration*.test.ts — env-gated live tests (AIPLOYEE_BRIDGE_LIVE=1)
 recon/notes/           — endpoint reconnaissance writeups (read these before adding new endpoints)
+scripts/diag-*.mjs     — read-only HTTP probes against the live tenant (run with `node scripts/diag-<name>.mjs` after `npm run build`)
 docs/superpowers/      — design docs + execution plans
+apps/installer/        — Electron GUI installer (bundles dist/ inside the binary)
+.github/workflows/release-installer.yml — tag-triggered per-OS build (.exe / .dmg / .AppImage)
 ```
 
 ## Development
@@ -977,6 +1059,35 @@ Watch-mode build:
 ```sh
 npm run dev
 ```
+
+### Run the bridge straight from your working copy (no installer)
+
+If you're iterating on the bridge itself, skip the installer + GitHub
+Releases loop and point Claude Desktop at your local `dist/` directly.
+Auth from a prior installer setup is reused.
+
+```powershell
+# from the repo root (Windows PowerShell)
+npm run build
+$cfg = "$env:APPDATA\Claude\claude_desktop_config.json"
+$json = Get-Content $cfg -Raw | ConvertFrom-Json
+if (-not $json.mcpServers) { $json | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) }
+$json.mcpServers | Add-Member -Force -NotePropertyName "aiployee-bridge" -NotePropertyValue ([pscustomobject]@{
+  command = "node"
+  args = @("$pwd/dist/mcp-server.js" -replace '\\','/')
+})
+$json | ConvertTo-Json -Depth 20 | Set-Content $cfg -Encoding utf8
+```
+
+Then fully quit Claude Desktop from the system tray and reopen.
+
+After every code change: `npm run build`, then quit + reopen Claude
+Desktop. No tags, no GitHub Actions, no reinstall. The bundled-installer
+copy is bypassed.
+
+If `npm` fails with `running scripts is disabled on this system`, either
+use `npm.cmd run build` once, or fix the policy persistently with
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
 ### Adding a new tool
 
