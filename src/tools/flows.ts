@@ -267,114 +267,427 @@ export async function deleteFlow(c: Client, uuid: string): Promise<{ ok: true; u
 }
 
 /**
- * Catalog of every node `type` the bridge can round-trip, plus the
- * shape its `data` block expects. Returned by the list_node_types MCP
- * tool so callers building flows from scratch know what to put in
- * each NodeDTO.config without reading the bridge source.
+ * Catalog of every node `type` the bridge can author, with a concrete
+ * create_node payload example and per-type wiring rules.
  *
- * Two tiers:
- *   - "strict": data block is parsed by a known zod schema. Use these
- *     to build first-class flow logic.
- *   - "raw": data block is a passthrough — bridge accepts whatever the
- *     editor saves, and you build the JSON shape yourself.
+ * Knowledge captured here was recon'd by trial-and-error against the
+ * live tenant — see /scripts/diag-* and the "Known recon gaps" section
+ * of CLAUDE.md. The payload examples are what `create_node` actually
+ * accepts; the constraints fields enforce what the server enforces.
  */
 export interface NodeTypeInfo {
   type: string;
   tier: "strict" | "raw";
   configKind: string;
-  dataShape: string;
+  /** Min/max output sockets enforced by the server. */
+  outputs: { min: number; max: number; labels?: string[] };
+  /** Required keys in the `data` block when calling create_node. */
+  requiredDataKeys: string[];
+  /**
+   * Working create_node body example — copy, swap UUIDs/strings, send.
+   * `flow_uuid`, `status`, `number`, `position` are universal and
+   * already included. `data.data_key` follows the convention
+   * `<type>_node_<number>` (server requires it).
+   */
+  createPayloadExample: Record<string, unknown>;
+  /** Notes from real failure modes — read before authoring this type. */
+  gotchas: string[];
 }
 
 export function listNodeTypes(): NodeTypeInfo[] {
+  const baseStub = {
+    flow_uuid: "<FLOW_UUID>",
+    status: 1,
+    number: 1,
+    position: [200, 200], // [x, y] array — NOT {x, y}
+  };
+
   return [
     {
       type: "inbound_call",
       tier: "strict",
       configKind: "inbound_call",
-      dataShape:
-        "{ phoneNumbers: string[], cancelPrevExecuting: boolean, googleSheetsSync?: { enabled, sheetId, sheetName } }",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key", "phone_numbers", "cancel_prev_executing", "google_sheets_sync_data"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "inbound_call",
+        name: "Inbound Trigger",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [],
+        data: {
+          data_key: "inbound_call_node_1",
+          phone_numbers: ["+27000000000"],
+          cancel_prev_executing: false,
+          google_sheets_sync_data: { use_google_sync: false, google_sheet_id: null, google_sheet_name: null },
+        },
+      },
+      gotchas: ["No inputs (it's a trigger).", "phone_numbers must be E.164 format."],
     },
     {
       type: "connect_call_agent",
       tier: "strict",
       configKind: "connect_call_agent",
-      dataShape:
-        "{ agentUuid: string, agentType: 'ai'|'real', copyAgent: boolean, prompt: string|null, phoneNumbers: string[], actions: unknown[] }",
+      outputs: { min: 2, max: 2, labels: ["Completed", "Transferred"] },
+      requiredDataKeys: ["data_key", "connect_agent_params", "actions"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "connect_call_agent",
+        name: "Connect to agent",
+        outputs: [
+          { id: "OD_1_0", name: "Completed", connections: [] },
+          { id: "OD_1_1", name: "Transferred", connections: [] },
+        ],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: {
+          data_key: "connect_call_agent_node_1",
+          actions: [],
+          connect_agent_params: {
+            copy: false,
+            type: "ai",            // "ai" | "real" — NOT agent_type/agentType
+            uuid: "<AGENT_UUID>",  // NOT agent_uuid/agentUuid
+            prompt: null,
+            phone_numbers: [],
+          },
+        },
+      },
+      gotchas: [
+        "connect_agent_params.type values: 'ai' or 'real' (not 'real_agent', 'agent_type', etc.).",
+        "connect_agent_params.uuid — NOT agent_uuid / agentId / agentUuid.",
+        "Output socket #1 is Transferred — the human-handoff branch.",
+      ],
     },
     {
       type: "call",
       tier: "strict",
       configKind: "call",
-      dataShape:
-        "{ agentUuid: string, copyAgent: boolean, prompt: string|null, phoneNumbers: string[], actions: unknown[], maxConcurrentExecuting: number|null, retryPolicy: { isActive, rules } }",
-    },
-    {
-      type: "internet_call",
-      tier: "raw",
-      configKind: "internet_call",
-      dataShape: "passthrough — raw object from the editor",
+      outputs: { min: 2, max: 2, labels: ["Completed", "Transferred"] },
+      requiredDataKeys: ["data_key", "agent_params", "retry_policy", "actions"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "call",
+        name: "Outbound call",
+        outputs: [
+          { id: "OD_1_0", name: "Completed", connections: [] },
+          { id: "OD_1_1", name: "Transferred", connections: [] },
+        ],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: {
+          data_key: "call_node_1",
+          actions: [],
+          max_concurrent_executing: null,
+          retry_policy: { is_active: false, rules: [] },
+          agent_params: {
+            copy: false,
+            uuid: "<AGENT_UUID>",  // NOT agent_uuid
+            prompt: null,
+            phone_numbers: ["{{ attributes.phone }}"],
+          },
+        },
+      },
+      gotchas: [
+        "agent_params.uuid (not agent_uuid). Different envelope key from connect_call_agent (connect_agent_params)!",
+        "phone_numbers can use Jinja-style template expressions like {{ attributes.phone }}.",
+        "retry_policy.rules entries: { attempts: int, interval_seconds: int }.",
+      ],
     },
     {
       type: "event",
       tier: "raw",
       configKind: "event",
-      dataShape: "passthrough — trigger event (e.g. insert_customer)",
-    },
-    {
-      type: "now",
-      tier: "raw",
-      configKind: "now",
-      dataShape: "passthrough — immediate trigger",
-    },
-    {
-      type: "split",
-      tier: "raw",
-      configKind: "split",
-      dataShape: "passthrough — branching with percentages that must sum to 100",
-    },
-    {
-      type: "delay",
-      tier: "raw",
-      configKind: "delay",
-      dataShape: "passthrough — wait N seconds/minutes/hours",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key", "filters"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "event",
+        name: "On contact insert",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [],
+        data: {
+          data_key: "event_node_1",
+          filters: [], // No conditions = fire on every matching event
+          event_kind: "insert_customer", // observed values; check existing flows for others
+        },
+      },
+      gotchas: ["No inputs (trigger).", "data.filters is the event-match filter, NOT the rich filter-node filters."],
     },
     {
       type: "filter",
       tier: "raw",
       configKind: "filter",
-      dataShape: "passthrough — conditional gate on attributes",
-    },
-    {
-      type: "update_data",
-      tier: "raw",
-      configKind: "update_data",
-      dataShape: "passthrough — write contact attributes",
+      outputs: { min: 2, max: 2, labels: ["True", "False"] },
+      requiredDataKeys: ["data_key", "filters"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "filter",
+        name: "Condition gate",
+        outputs: [
+          { id: "OD_1_0", name: "True", connections: [] },
+          { id: "OD_1_1", name: "False", connections: [] },
+        ],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: {
+          data_key: "filter_node_1",
+          // Rich filter rules — populate via update_node after create.
+          // Rule ids must be ≤12 chars, e.g. "296091065803".
+          filters: [],
+        },
+      },
+      gotchas: [
+        "create_node REJECTS rich filter rules ('Allowed only id, name, connections keys'). Create empty, populate via update_node.",
+        "Filter rule ids must be ≤12 chars — existing flows use 12-digit numerics.",
+      ],
     },
     {
       type: "ai_data_generation",
       tier: "raw",
       configKind: "ai_data_generation",
-      dataShape: "passthrough — LLM extraction node",
-    },
-    {
-      type: "sms",
-      tier: "raw",
-      configKind: "sms",
-      dataShape: "passthrough — outbound SMS",
-    },
-    {
-      type: "email",
-      tier: "raw",
-      configKind: "email",
-      dataShape: "passthrough — outbound email",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key", "llm_params", "json_mapper", "llm_credentials"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "ai_data_generation",
+        name: "Extract structured data",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: {
+          data_key: "ai_data_generation_node_1",
+          llm_credentials: { provider: "openai", api_key: "<OPENAI_KEY>" },
+          llm_params: { model: "gpt-4.1-mini", temperature: 0, system_prompt: "...", user_prompt: "{{ transcript }}" },
+          json_mapper: { schema: { /* JSON schema */ }, output_attribute: "ai_extract_1" },
+        },
+      },
+      gotchas: [
+        "llm_credentials.api_key is plaintext on the wire — prefer an integration credential.",
+        "output_attribute is what later nodes reference (e.g. ai_extract_4.needs_assistance).",
+      ],
     },
     {
       type: "api_request",
       tier: "raw",
       configKind: "api_request",
-      dataShape: "passthrough — outbound HTTP webhook",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key", "request"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "api_request",
+        name: "Webhook",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: {
+          data_key: "api_request_node_1",
+          request: {
+            method: "POST",
+            url: "https://example.com/webhook",
+            headers: {},
+            body: { /* template expressions allowed */ },
+            retry: { attempts: 3, delay_seconds: 30 },
+          },
+        },
+      },
+      gotchas: ["Outputs are capped at 1 — no per-status branching."],
+    },
+    {
+      type: "sms",
+      tier: "raw",
+      configKind: "sms",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key", "sms_params"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "sms",
+        name: "Send SMS",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: {
+          data_key: "sms_node_1",
+          sms_params: {
+            provider_slug: "<provider>", // common: twilio, clickatell, infobip, mymobileapi
+            to: "{{ attributes.phone }}",
+            message: "Hello",
+          },
+        },
+      },
+      gotchas: [
+        "provider_slug is required and must match a provider configured on the tenant.",
+        "Ask the user which SMS provider is wired up — no default.",
+      ],
+    },
+    {
+      type: "update_data",
+      tier: "raw",
+      configKind: "update_data",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key", "actions"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "update_data",
+        name: "Set attributes",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: {
+          data_key: "update_data_node_1",
+          actions: [
+            // { attribute_slug: "first_name", value: "{{ ai_extract_1.first_name }}" }
+          ],
+        },
+      },
+      gotchas: ["Attribute slugs must exist — call list_custom_fields first."],
+    },
+    {
+      type: "delay",
+      tier: "raw",
+      configKind: "delay",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key", "delay_params"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "delay",
+        name: "Wait",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: { data_key: "delay_node_1", delay_params: { amount: 5, unit: "minutes" } },
+      },
+      gotchas: [],
+    },
+    {
+      type: "split",
+      tier: "raw",
+      configKind: "split",
+      outputs: { min: 2, max: 10 },
+      requiredDataKeys: ["data_key", "branches"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "split",
+        name: "A/B split",
+        outputs: [
+          { id: "OD_1_0", name: "A", connections: [] },
+          { id: "OD_1_1", name: "B", connections: [] },
+        ],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: { data_key: "split_node_1", branches: [{ percentage: 50 }, { percentage: 50 }] },
+      },
+      gotchas: ["Branch percentages must sum to 100."],
+    },
+    {
+      type: "email",
+      tier: "raw",
+      configKind: "email",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key", "email_params"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "email",
+        name: "Send email",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [{ id: "ID_1_0", name: null, connections: [] }],
+        data: { data_key: "email_node_1", email_params: { to: "", subject: "", body_html: "" } },
+      },
+      gotchas: [],
+    },
+    {
+      type: "now",
+      tier: "raw",
+      configKind: "now",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "now",
+        name: "Run immediately",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [],
+        data: { data_key: "now_node_1" },
+      },
+      gotchas: ["No inputs (trigger)."],
+    },
+    {
+      type: "internet_call",
+      tier: "raw",
+      configKind: "internet_call",
+      outputs: { min: 1, max: 1 },
+      requiredDataKeys: ["data_key"],
+      createPayloadExample: {
+        ...baseStub,
+        type: "internet_call",
+        name: "Web widget trigger",
+        outputs: [{ id: "OD_1_0", name: "Completed", connections: [] }],
+        inputs: [],
+        data: { data_key: "internet_call_node_1" },
+      },
+      gotchas: ["No inputs (trigger). Fires when the widget call begins."],
     },
   ];
+}
+
+/**
+ * Compute the conventional socket id for a node.
+ * Pattern (server-enforced): OD_<node_number>_<index>, ID_<node_number>_<index>.
+ */
+export function socketId(direction: "input" | "output", nodeNumber: number, index: number): string {
+  return `${direction === "output" ? "OD" : "ID"}_${nodeNumber}_${index}`;
+}
+
+/**
+ * Wire a single connection between two existing nodes.
+ *
+ * Reads the current flow state, mutates one output socket's connections
+ * array, then POSTs /v1/nodes/save. Idempotent — re-running with the
+ * same args is a no-op.
+ *
+ * Use this for incremental wiring instead of building a full FlowDTO
+ * and calling update_flow. The bridge handles socket-id lookup so the
+ * caller never has to construct "OD_3_1" strings.
+ */
+export async function connectNodes(
+  c: Client,
+  args: {
+    flow_uuid: string;
+    from_node_uuid: string;
+    from_output_index: number;
+    to_node_uuid: string;
+    to_input_index?: number; // default 0
+  },
+): Promise<{ ok: true; from_socket: string; to_socket: string }> {
+  const toInputIndex = args.to_input_index ?? 0;
+  const nodes = await c.getFlowNodes(args.flow_uuid);
+
+  const fromNode = nodes.find((n) => n.uuid === args.from_node_uuid);
+  const toNode = nodes.find((n) => n.uuid === args.to_node_uuid);
+  if (!fromNode) throw new Error(`connectNodes: from_node_uuid ${args.from_node_uuid} not found in flow`);
+  if (!toNode) throw new Error(`connectNodes: to_node_uuid ${args.to_node_uuid} not found in flow`);
+
+  const fromOutput = fromNode.outputs[args.from_output_index];
+  if (!fromOutput) {
+    throw new Error(
+      `connectNodes: source node has no output #${args.from_output_index} (it has ${fromNode.outputs.length} outputs)`,
+    );
+  }
+
+  const toInput = toNode.inputs[toInputIndex];
+  if (!toInput) {
+    throw new Error(
+      `connectNodes: target node has no input #${toInputIndex} (it has ${toNode.inputs.length} inputs)`,
+    );
+  }
+
+  // Idempotent: skip if the connection already exists.
+  const already = fromOutput.connections.some(
+    (c) => c.node_number === toNode.number && c.node_socket === toInput.id,
+  );
+  if (!already) {
+    fromOutput.connections.push({ node_number: toNode.number, node_socket: toInput.id });
+  }
+
+  // POST the full graph back. saveFlow expects SaveFlowRequest shape.
+  await c.saveFlow({
+    flow_uuid: args.flow_uuid,
+    flow_name: "", // server retains existing name when blank
+    flow_description: "",
+    nodes,
+  });
+
+  return { ok: true, from_socket: fromOutput.id, to_socket: toInput.id };
 }
 
 export async function getFlow(

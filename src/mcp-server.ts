@@ -20,6 +20,7 @@ import {
   validateFlowLocal,
   setFlowStatus,
   listNodeTypes,
+  connectNodes,
 } from "./tools/flows.js";
 import { listAgents, getAgent, updateAgent } from "./tools/agents.js";
 import { listCustomFields, upsertCustomField, deleteCustomField } from "./tools/custom_fields.js";
@@ -61,10 +62,58 @@ async function main(): Promise<void> {
     return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
   }
 
-  // Helper: convert Error to MCP text content (isError flag signals failure to caller)
+  // Helper: convert Error to MCP text content (isError flag signals failure to caller).
+  // ApiError's `errors` field carries the server's validation breakdown — surface it
+  // verbatim so the LLM sees the exact field/key it tripped on instead of just the top
+  // line. This pattern (rich pass-through) is load-bearing for iterative authoring.
   function fail(err: unknown): { isError: true; content: [{ type: "text"; text: string }] } {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { isError: true as const, content: [{ type: "text" as const, text: msg }] };
+    let payload: unknown;
+    if (err instanceof Error) {
+      const errors = (err as { errors?: unknown }).errors;
+      const httpStatus = (err as { httpStatus?: unknown }).httpStatus;
+      const endpoint = (err as { endpoint?: unknown }).endpoint;
+      payload = errors !== undefined || httpStatus !== undefined
+        ? { message: err.message, httpStatus, endpoint, errors }
+        : err.message;
+    } else {
+      payload = String(err);
+    }
+    const text = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+    return { isError: true as const, content: [{ type: "text" as const, text }] };
+  }
+
+  // Auto-fill socket ids when the caller passes outputs/inputs as bare
+  // label strings. The server's id format is rigid:
+  //   outputs: OD_<node_number>_<index>
+  //   inputs:  ID_<node_number>_<index>
+  // Letting the LLM say `outputs: ["Completed", "Transferred"]` is far
+  // less error-prone than asking it to construct those strings.
+  function normalizeCreateNodeBody(body: Record<string, unknown>): Record<string, unknown> {
+    const out = { ...body };
+    const num = typeof out.number === "number" ? out.number : 1;
+    if (Array.isArray(out.outputs)) {
+      out.outputs = out.outputs.map((entry, i) => {
+        if (typeof entry === "string") {
+          return { id: `OD_${num}_${i}`, name: entry, connections: [] };
+        }
+        if (entry && typeof entry === "object" && !("id" in entry)) {
+          return { id: `OD_${num}_${i}`, connections: [], ...entry };
+        }
+        return entry;
+      });
+    }
+    if (Array.isArray(out.inputs)) {
+      out.inputs = out.inputs.map((entry, i) => {
+        if (typeof entry === "string") {
+          return { id: `ID_${num}_${i}`, name: entry, connections: [] };
+        }
+        if (entry && typeof entry === "object" && !("id" in entry)) {
+          return { id: `ID_${num}_${i}`, connections: [], ...entry };
+        }
+        return entry;
+      });
+    }
+    return out;
   }
 
   // --- list_flows ---
@@ -129,16 +178,22 @@ async function main(): Promise<void> {
   // The save-whole-flow endpoint (used by update_flow) requires every
   // node UUID to already exist server-side. To author a brand-new flow
   // from scratch the LLM must mint each node here first, collect the
-  // returned UUIDs, then assemble those into a FlowDTO for update_flow.
+  // returned UUIDs, then wire connections via connect_nodes or update_flow.
+  //
+  // Quality-of-life: if the caller passes outputs/inputs as bare label
+  // strings (e.g. ["Completed", "Transferred"]) the bridge synthesises
+  // the OD_<number>_<i> / ID_<number>_<i> socket ids automatically,
+  // so the LLM never has to construct the server's id format by hand.
   server.tool(
     "create_node",
-    "Mint a single new node attached to an existing flow. POSTs /v1/nodes; server returns the new node with a real UUID and `number`. Body must include at least { flow_uuid, type, data }. Use list_node_types for the data-block shapes. After creating all nodes, call update_flow with their server-minted UUIDs to wire connections.",
+    "Mint a single new node. POSTs /v1/nodes; server returns the new node with a real UUID and `number`. Use list_node_types first to see the working payload example for each type — copy it, swap UUIDs/strings, and send. Outputs/inputs accept either full socket objects {id, name, connections} OR bare label strings (the bridge auto-fills socket ids).",
     {
       body: z.record(z.string(), z.unknown()),
     },
     async ({ body }) => {
       try {
-        const result = await client.createNode(body);
+        const normalised = normalizeCreateNodeBody(body);
+        const result = await client.createNode(normalised);
         return ok(result);
       } catch (err) {
         return fail(err);
@@ -149,14 +204,40 @@ async function main(): Promise<void> {
   // --- update_node ---
   server.tool(
     "update_node",
-    "Replace a single node's config in place by UUID. PUTs /v1/nodes/<uuid>. Use this for surgical edits when you don't want to re-send the whole flow via update_flow.",
+    "Replace a single node's config in place by UUID. PUTs /v1/nodes/<uuid>. Use this for surgical edits and for populating filter rules (create_node rejects rich filter shapes, update_node accepts them). IMPORTANT: body must include flow_uuid — the server returns 'Flow not found' if it's missing, which is misleading.",
     {
       uuid: z.string().uuid(),
       body: z.record(z.string(), z.unknown()),
     },
     async ({ uuid, body }) => {
       try {
+        if (!body.flow_uuid || typeof body.flow_uuid !== "string") {
+          throw new Error(
+            "update_node: body.flow_uuid is required. The server's 'Flow not found' error fires when it's missing — surface this clearly so the LLM knows what to fix.",
+          );
+        }
         const result = await client.updateNode(uuid, body);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- connect_nodes ---
+  server.tool(
+    "connect_nodes",
+    "Wire a single connection between two existing nodes. Bridge fetches current state, mutates the source output socket's connections array, and saves. Idempotent. Use this for incremental wiring instead of assembling a full FlowDTO. Socket IDs are computed automatically — pass output INDEX (0=first output, e.g. Completed; 1=second, e.g. Transferred or False) not the OD_N_M string.",
+    {
+      flow_uuid: z.string().uuid(),
+      from_node_uuid: z.string().uuid(),
+      from_output_index: z.number().int().min(0),
+      to_node_uuid: z.string().uuid(),
+      to_input_index: z.number().int().min(0).default(0),
+    },
+    async (args) => {
+      try {
+        const result = await connectNodes(client, args);
         return ok(result);
       } catch (err) {
         return fail(err);

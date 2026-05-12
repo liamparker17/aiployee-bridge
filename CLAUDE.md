@@ -99,29 +99,75 @@ scripts/diag-*.mjs  ad-hoc recon scripts (read-only HTTP probes)
 existing server-minted node UUIDs**. Synthetic UUIDs return
 `"Node with this uuid not found"`. Authoring a new flow looks like:
 
-1. `list_node_types` — catalog of valid `type` strings + data-block shapes
-2. `list_agents`, `list_phone_numbers` — get real UUIDs to embed
-3. `create_flow(name, description)` → `flow_uuid`
+1. `list_node_types` — catalog of valid `type` strings + WORKING
+   payload example + gotchas for each. Copy the example, swap UUIDs,
+   send.
+2. `list_agents`, `list_phone_numbers`, `list_custom_fields` — get
+   real UUIDs/slugs to embed.
+3. `create_flow(name, description)` → `flow_uuid`.
 4. **`create_node({flow_uuid, type, data, position?})` × N** — server
-   mints each node's UUID and returns the wire-node
-5. Assemble the minted UUIDs + connections into a `FlowDTO`
-6. `validate_flow(flow)` — local lint
-7. `update_flow(flow)` — POSTs `/v1/nodes/save`; wires connections
-8. `run_flow_test` — quick sanity check via /temporary-agent-widget
-9. `set_flow_status(uuid, "Active", confirm: <exact name>)`
+   mints each node's UUID and `number`. Pass outputs/inputs as bare
+   label strings (`["Completed", "Transferred"]`) and the bridge
+   builds the OD_N_M / ID_N_M ids for you.
+5. **`connect_nodes({flow_uuid, from_node_uuid, from_output_index,
+   to_node_uuid, to_input_index?})`** × M — wire one edge at a time.
+   Idempotent. Far easier than assembling a FlowDTO.
+6. For rich filter rules: `update_node` with `flow_uuid` in the body
+   (create_node rejects them).
+7. `run_flow_test` — sanity check via /temporary-agent-widget.
+8. `set_flow_status(uuid, "Active", confirm: <exact name>)`.
+
+`update_flow` with a full FlowDTO still works for bulk graph
+replacement, but `connect_nodes` is the preferred path for new wiring
+— smaller blast radius, idempotent, no need to round-trip the whole
+graph through the DTO normaliser.
 
 Skipping step 4 is the trap. `update_flow` is for editing
 already-saved nodes; it isn't a node creator.
 
 ## Known recon gaps
 
-- **`POST /v1/nodes` body shape** — the editor emits `event.detail`
-  from the `nodular` web component; the field list isn't documented
-  anywhere we've inspected. The bridge accepts a passthrough record
-  and surfaces server validation errors verbatim so the LLM iterates.
-  If you can capture one real request from the editor (DevTools →
-  Network → filter `nodes`), drop the JSON into a fixture and tighten
-  the schema.
+- **`POST /v1/nodes` body shape** — partially recon'd by trial-and-error
+  against the live tenant. `listNodeTypes()` in `src/tools/flows.ts`
+  carries working payload examples for every type observed (`call`,
+  `connect_call_agent`, `inbound_call`, `event`, `filter`,
+  `ai_data_generation`, `api_request`, `sms`, `update_data`, `delay`,
+  `split`, `email`, `now`, `internet_call`). The `gotchas` field
+  surfaces the foot-guns each type tripped. If you discover a new
+  type or a new required key, add it there — that's the canonical
+  source the LLM reads via `list_node_types`.
+- **Per-type required keys (server-side validators)** — recon'd:
+  - `status`, `number`, `position` are universal. `position` is an
+    `[x, y]` array, NOT `{x, y}`.
+  - `data.data_key` is required on every node (pattern
+    `<type>_node_<number>`).
+  - `connect_call_agent`: `connect_agent_params.type` ∈ {"ai", "real"};
+    `.uuid` (NOT `agent_uuid`/`agentUuid`).
+  - `call`: `agent_params.uuid` (different envelope key from
+    `connect_call_agent` — yes, really).
+  - `filter`: create with empty `data.filters: []`; populate rich
+    rules via `update_node` (create_node rejects them with
+    "Allowed only id, name, connections keys" — error refers to the
+    *output socket* filters array, not the filter rules).
+  - Filter rule ids must be ≤12 chars (existing flows use 12-digit
+    numerics like "296091065803").
+  - `ai_data_generation`: requires `llm_credentials`, `llm_params`,
+    `json_mapper`.
+  - `sms`: requires `sms_params.provider_slug` — must match a tenant-
+    configured provider. Ask the user; no default exists.
+- **Socket id pattern** — server-enforced:
+  `OD_<node_number>_<index>` for outputs,
+  `ID_<node_number>_<index>` for inputs. `create_node` auto-fills
+  these when outputs/inputs are passed as bare label strings.
+- **Output count constraints** — per-type, encoded in
+  `NodeTypeInfo.outputs.{min, max}`:
+  - `filter`, `call`, `connect_call_agent`, `split`: ≥2 outputs.
+  - `api_request`, `sms`, `email`, `delay`, `update_data`,
+    `ai_data_generation`, `event`, `now`, `internet_call`,
+    `inbound_call`: exactly 1 output.
+- **`update_node` body needs `flow_uuid`** — the server returns
+  "Flow not found." if missing, which is misleading. The bridge
+  validates this client-side and surfaces a clear message.
 - **Yii `_csrf` lifetime** — empirically valid for the session. We
   re-fetch a fresh token per `postWithCsrf` call (cheap, never wrong).
 - **Flow `delete` for Active flows** — Yii route accepts the POST but
@@ -138,9 +184,10 @@ already-saved nodes; it isn't a node creator.
 | `create_flow` | Yii `POST /flows/create` (SaveFlowForm) |
 | `delete_flow` | Yii `POST /flows/<uuid>/delete` (CSRF, no body) |
 | `update_flow` | REST `POST /v1/nodes/save` (existing UUIDs only) |
-| `create_node` | REST `POST /v1/nodes` (server mints UUID) |
-| `update_node` | REST `PUT /v1/nodes/<uuid>` |
+| `create_node` | REST `POST /v1/nodes` (server mints UUID; bridge auto-fills socket ids) |
+| `update_node` | REST `PUT /v1/nodes/<uuid>` (body must include `flow_uuid`) |
 | `delete_node` | REST `DELETE /v1/nodes/<uuid>` |
+| `connect_nodes` | bridge-local — reads graph, mutates one socket's connections, calls `update_flow` |
 | `validate_flow` | local zod + business rules (no network) |
 | `set_flow_status` | REST `PATCH /v1/flows/<uuid>/activate` (confirm-by-name safety check) |
 | `list_agents`, `get_agent` | Yii form-scrape `/agents`, `/agents/<id>/edit` |
