@@ -1070,14 +1070,16 @@ Auth from a prior installer setup is reused.
 # from the repo root (Windows PowerShell)
 npm run build
 $cfg = "$env:APPDATA\Claude\claude_desktop_config.json"
-$json = Get-Content $cfg -Raw | ConvertFrom-Json
+$json = if (Test-Path $cfg) { Get-Content $cfg -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
 if (-not $json.mcpServers) { $json | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) }
-$json.mcpServers | Add-Member -Force -NotePropertyName "aiployee-bridge" -NotePropertyValue ([pscustomobject]@{
-  command = "node"
-  args = @("$pwd/dist/mcp-server.js" -replace '\\','/')
-})
-$json | ConvertTo-Json -Depth 20 | Set-Content $cfg -Encoding utf8
+$path = ($pwd.Path + "\dist\mcp-server.js") -replace '\\','/'
+$json.mcpServers | Add-Member -Force -NotePropertyName "aiployee-bridge" -NotePropertyValue ([pscustomobject]@{ command = "node"; args = @($path) })
+[System.IO.File]::WriteAllText($cfg, ($json | ConvertTo-Json -Depth 20))
 ```
+
+(Avoid `Set-Content -Encoding utf8` in Windows PowerShell 5.1 — it
+emits a UTF-8 BOM that Claude Desktop's JSON parser rejects. The
+`.NET WriteAllText` call above writes BOM-less UTF-8.)
 
 Then fully quit Claude Desktop from the system tray and reopen.
 
