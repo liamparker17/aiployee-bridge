@@ -21,6 +21,7 @@ import {
   type CustomFieldDTO,
 } from "./custom_fields.js";
 import { getContact, updateContactAttribute, type ContactDTO } from "./contacts.js";
+import { setFlowStatus, type FlowStatus, type SetFlowStatusArgs, type SetFlowStatusResult } from "./flow_status.js";
 import type { FlowNode } from "../schema/index.js";
 import type { SaveFlowRequest } from "../schema/flow.js";
 
@@ -28,6 +29,7 @@ export type { DropdownOption, IntegrationsList, PhoneNumberPoolEntry, PhoneNumbe
 export type { AgentDetails, AgentUpdate };
 export type { CustomFieldDTO };
 export type { ContactDTO };
+export type { FlowStatus, SetFlowStatusArgs, SetFlowStatusResult };
 
 export interface ClientOptions extends Partial<TransportOptions> {
   /** Yii host override (default: from auth file or DEFAULT_YII_HOST). */
@@ -138,6 +140,10 @@ export class Client {
 
   saveFlow(req: SaveFlowRequest): Promise<void> {
     return saveFlow(this.transport, req);
+  }
+
+  setFlowStatus(args: SetFlowStatusArgs): Promise<SetFlowStatusResult> {
+    return setFlowStatus(this, args);
   }
 
   // --- Discovery / reference data ---

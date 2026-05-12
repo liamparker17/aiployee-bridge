@@ -187,3 +187,20 @@ export async function updateFlow(c: Client, flow: FlowDTO): Promise<void> {
 export function validateFlowLocal(flow: FlowDTO): ValidationIssue[] {
   return validateFlow(flow);
 }
+
+export type { FlowStatus, SetFlowStatusArgs, SetFlowStatusResult } from "../client/flow_status.js";
+import { setFlowStatus as _setFlowStatus } from "../client/flow_status.js";
+
+/**
+ * Activate or deactivate a flow safely.
+ *
+ * Reads current state first, confirms the token matches the flow name,
+ * runs pre-activation validation and phone-collision detection, then
+ * PATCHes the toggle endpoint only when a state change is actually needed.
+ */
+export function setFlowStatus(
+  c: Client,
+  args: import("../client/flow_status.js").SetFlowStatusArgs,
+): Promise<import("../client/flow_status.js").SetFlowStatusResult> {
+  return _setFlowStatus(c, args);
+}

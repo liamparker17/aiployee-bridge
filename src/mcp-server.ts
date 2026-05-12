@@ -11,7 +11,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { Client } from "./client/index.js";
-import { listFlows, getFlow, updateFlow, validateFlowLocal } from "./tools/flows.js";
+import { listFlows, getFlow, updateFlow, validateFlowLocal, setFlowStatus } from "./tools/flows.js";
 import { listAgents, getAgent, updateAgent } from "./tools/agents.js";
 import { listCustomFields, upsertCustomField, deleteCustomField } from "./tools/custom_fields.js";
 import { getContact, updateContactAttribute } from "./tools/contacts.js";
@@ -271,6 +271,33 @@ async function main(): Promise<void> {
       try {
         await updateContactAttribute(client, { contactUuid, slug, value });
         return ok({ ok: true });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- set_flow_status ---
+  server.tool(
+    "set_flow_status",
+    [
+      "Activate or deactivate a flow.",
+      "",
+      "SAFETY REQUIREMENTS:",
+      "• `confirm` must be the flow's EXACT current name (copy it from list_flows). The bridge refuses if it doesn't match, preventing accidental activation of the wrong flow.",
+      "• When activating, the bridge runs local validation first — flows with error-severity issues are refused.",
+      "• When activating, the bridge checks all other Active flows for inbound phone number collisions. If another Active flow already owns an inbound number this flow also claims, the bridge REFUSES and names both the conflicting flow UUID and the number. Deactivate that flow first if you intend to take over the number.",
+      "• The underlying endpoint (`PATCH /v1/flows/<uuid>/activate`) is a TOGGLE — calling it twice returns to the original state. The bridge reads current state and only PATCHes when the desired state differs.",
+    ].join("\n"),
+    {
+      uuid: z.string().min(1, "uuid is required"),
+      status: z.enum(["Active", "Inactive"]),
+      confirm: z.string().min(1, "confirm is required — must be the flow's exact name"),
+    },
+    async ({ uuid, status, confirm }) => {
+      try {
+        const result = await setFlowStatus(client, { uuid, status, confirm });
+        return ok(result);
       } catch (err) {
         return fail(err);
       }

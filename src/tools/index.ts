@@ -5,8 +5,8 @@
  * "aiployee-bridge" entrypoint (which re-exports these symbols).
  */
 
-export type { FlowSummary } from "./flows.js";
-export { listFlows, getFlow, updateFlow, validateFlowLocal } from "./flows.js";
+export type { FlowSummary, FlowStatus, SetFlowStatusArgs, SetFlowStatusResult } from "./flows.js";
+export { listFlows, getFlow, updateFlow, validateFlowLocal, setFlowStatus } from "./flows.js";
 
 export type { AgentSummary, AgentDetails, AgentUpdate } from "./agents.js";
 export { listAgents, getAgent, updateAgent } from "./agents.js";
