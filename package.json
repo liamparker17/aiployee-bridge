@@ -1,6 +1,6 @@
 {
   "name": "aiployee-bridge",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "MCP server that exposes AIployee Flows as high-level tool calls. Talks HTTPS directly to the AIployee tenant; no DOM automation, no architect-tool runtime dependency.",
   "license": "UNLICENSED",

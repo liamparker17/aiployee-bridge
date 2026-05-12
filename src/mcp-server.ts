@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   // ---------- build server ----------
   const server = new McpServer({
     name: "aiployee-bridge",
-    version: "0.0.0",
+    version: "0.1.0",
   });
 
   // Helper: wrap result as MCP content array
