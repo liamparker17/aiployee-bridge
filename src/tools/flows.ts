@@ -53,34 +53,22 @@ export async function listFlows(c: Client): Promise<FlowSummary[]> {
     }
   }
 
-  // Fallback: scrape the Yii HTML listing page
+  // Fallback: scrape the Yii HTML listing page using the YiiTransport,
+  // which carries the full session cookie jar (PHPSESSID + _identity + _csrf).
+  // A bare access_token cookie is not enough — Yii will 302 to /site/login.
   console.warn(
-    "[aiployee-bridge] GET /v1/flows returned 404 — falling back to HTML scrape of " +
-      "https://aiployee.jobix.ai/flows (best-effort; may fail in headless mode)",
+    "[aiployee-bridge] GET /v1/flows returned 404 — falling back to Yii HTML scrape of /flows",
   );
-
-  // The access_token cookie value equals the bearer token value.
-  const token = c.transport.token;
-
-  if (/[\r\n]/.test(token)) {
-    throw new Error(
-      "auth token contains illegal characters (CR/LF); rerun `aiployee-bridge auth`",
-    );
-  }
 
   let html: string;
   try {
-    const res = await c.transport.fetchImpl("https://aiployee.jobix.ai/flows", {
-      headers: {
-        Cookie: `access_token=${token}`,
-        Accept: "text/html",
-      },
-    });
-    html = await res.text();
+    const res = await c.yiiTransport.fetchHtml("/flows");
+    html = res.html;
   } catch (fetchErr) {
     throw new Error(
-      "listFlows: /v1/flows not yet recon'd; HTML fallback unavailable in headless mode — " +
-        "capture this endpoint and rerun",
+      `listFlows: /v1/flows unavailable and Yii HTML fallback failed: ${
+        fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+      }`,
     );
   }
 
