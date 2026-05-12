@@ -276,7 +276,7 @@ async function wireClaudeDesktop() {
   await fsp.writeFile(tmpPath, JSON.stringify(config, null, 2), "utf8");
   await fsp.rename(tmpPath, configPath);
 
-  return { ok: true, configPath, backupPath, normalizedServerPath: normalizedPath };
+  return { ok: true, configPath, backupPath, normalizedServerPath: normalizedScript };
 }
 
 // ---------------------------------------------------------------------------
