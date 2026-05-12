@@ -1,0 +1,105 @@
+name: Build and release installer binaries
+
+# Triggers:
+#   - Pushing a tag matching v*.*.* (e.g. v0.1.0, v0.2.0-beta)
+#   - Manual trigger from the Actions tab (workflow_dispatch)
+#
+# What it does:
+#   - Builds the bridge (`npm install && npm run build` in the repo root)
+#     and runs the installer's prepare-bridge-bundle.js so the runtime
+#     ends up inside apps/installer/bundled-bridge/.
+#   - Runs electron-builder per-OS:
+#       * Windows runner   → NSIS .exe (x64)
+#       * macOS runner     → .dmg (arm64 AND x64, universal-style two artifacts)
+#       * Ubuntu runner    → .AppImage (x64)
+#   - Uploads every artifact to the GitHub Release matching the pushed tag.
+#
+# What it does NOT do:
+#   - Code signing. Binaries are unsigned. First-launch warnings on
+#     Windows SmartScreen and macOS Gatekeeper are expected; users
+#     bypass them with "More info → Run anyway" or right-click → Open.
+#     Signing requires repository secrets (CSC_LINK, CSC_KEY_PASSWORD,
+#     APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD) — wire up later if needed.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release as (e.g. v0.1.0). Must already exist.'
+        required: true
+        type: string
+
+permissions:
+  contents: write  # required to create / update a GitHub Release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+            build-cmd: build:win
+            artifact-glob: |
+              apps/installer/release/*.exe
+              apps/installer/release/*.exe.blockmap
+          - os: macos-latest
+            label: macos
+            build-cmd: build:mac
+            artifact-glob: |
+              apps/installer/release/*.dmg
+              apps/installer/release/*.dmg.blockmap
+          - os: ubuntu-latest
+            label: linux-x64
+            build-cmd: build:linux
+            artifact-glob: |
+              apps/installer/release/*.AppImage
+
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.label }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ----- Build the bridge -----
+      - name: Install bridge dependencies
+        run: npm install
+      - name: Build the bridge
+        run: npm run build
+
+      # ----- Build the installer (bundles bridge via prebuild) -----
+      - name: Install installer dependencies
+        run: npm install
+        working-directory: apps/installer
+      - name: Build installer (${{ matrix.label }})
+        run: npm run ${{ matrix.build-cmd }}
+        working-directory: apps/installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List build output
+        run: |
+          ls -la apps/installer/release || dir apps\installer\release
+        shell: bash
+
+      # ----- Upload artifacts to the Release -----
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: ${{ matrix.artifact-glob }}
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
