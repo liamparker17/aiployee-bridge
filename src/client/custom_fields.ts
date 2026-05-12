@@ -36,11 +36,16 @@ export interface CustomFieldDTO {
   /** null for inserts; assigned by server on first save. */
   uuid: string | null;
   name: string;
-  /** Verified enum — string|integer|float|boolean|date|array. */
-  type: CustomFieldType;
+  /**
+   * Canonical enum: string|integer|float|boolean|date|array.
+   * `unknown` is a sentinel for tenant-side drift — see `parseWarning`.
+   */
+  type: CustomFieldType | "unknown";
   /** The `{{ attributes.<slug> }}` template key. */
   slug: string;
   description: string;
+  /** When the parser couldn't validate this row, the reason lives here. */
+  parseWarning?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,19 +100,25 @@ function extractRows(
     };
 
     const typeRaw = raw("type");
-    if (!isCustomFieldType(typeRaw)) {
-      throw new Error(
-        `listCustomFields: schema drift — row index ${i} has type="${typeRaw}" which is not in the verified enum [${CUSTOM_FIELD_TYPES.join(", ")}]`,
-      );
-    }
-
     const uuidRaw = raw("uuid");
+    // Tolerant parse: if the type isn't a known value (drift / null /
+    // empty), keep the row with sentinel "unknown" + a warning. This
+    // used to throw and kill the whole list — taking down both
+    // listCustomFields and upsertCustomField (which lists internally).
+    // The LLM and the user can see the broken row and fix it from the
+    // UI rather than being blocked on every Custom Field operation.
+    const isValid = isCustomFieldType(typeRaw);
     rows.push({
       uuid: uuidRaw === "" ? null : uuidRaw,
       name: raw("name"),
-      type: typeRaw,
+      type: isValid ? typeRaw : "unknown",
       slug: raw("slug"),
       description: raw("description"),
+      ...(isValid
+        ? {}
+        : {
+            parseWarning: `row index ${i} has type="${typeRaw}" — not in the verified enum [${CUSTOM_FIELD_TYPES.join(", ")}]. Delete this row from the AIployee UI to clean up.`,
+          }),
     });
   }
 
