@@ -125,6 +125,60 @@ async function main(): Promise<void> {
     },
   );
 
+  // --- create_node ---
+  // The save-whole-flow endpoint (used by update_flow) requires every
+  // node UUID to already exist server-side. To author a brand-new flow
+  // from scratch the LLM must mint each node here first, collect the
+  // returned UUIDs, then assemble those into a FlowDTO for update_flow.
+  server.tool(
+    "create_node",
+    "Mint a single new node attached to an existing flow. POSTs /v1/nodes; server returns the new node with a real UUID and `number`. Body must include at least { flow_uuid, type, data }. Use list_node_types for the data-block shapes. After creating all nodes, call update_flow with their server-minted UUIDs to wire connections.",
+    {
+      body: z.record(z.string(), z.unknown()),
+    },
+    async ({ body }) => {
+      try {
+        const result = await client.createNode(body);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- update_node ---
+  server.tool(
+    "update_node",
+    "Replace a single node's config in place by UUID. PUTs /v1/nodes/<uuid>. Use this for surgical edits when you don't want to re-send the whole flow via update_flow.",
+    {
+      uuid: z.string().uuid(),
+      body: z.record(z.string(), z.unknown()),
+    },
+    async ({ uuid, body }) => {
+      try {
+        const result = await client.updateNode(uuid, body);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- delete_node ---
+  server.tool(
+    "delete_node",
+    "Delete a single node by UUID. DELETEs /v1/nodes/<uuid>. Connections that referenced it are cleaned up server-side.",
+    { uuid: z.string().uuid() },
+    async ({ uuid }) => {
+      try {
+        const result = await client.deleteNode(uuid);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
   // --- delete_flow ---
   server.tool(
     "delete_flow",

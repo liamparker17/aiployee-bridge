@@ -1,7 +1,7 @@
 {
   "name": "aiployee-bridge-installer",
   "productName": "AIployee Bridge Installer",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Self-contained desktop GUI that installs the aiployee-bridge MCP server into Claude Desktop. Bundles the bridge runtime; no Node.js or git required on the user's machine.",
   "private": true,
   "author": "Liam Parker",
