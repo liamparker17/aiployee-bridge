@@ -19,3 +19,14 @@ export { listCustomFields, upsertCustomField, deleteCustomField } from "./custom
 
 export type { ContactDTO } from "./contacts.js";
 export { getContact, updateContactAttribute } from "./contacts.js";
+
+export type {
+  FlowRunSummary,
+  TranscriptEntry,
+  NodePathEntry,
+  FlowRunDetail,
+} from "./flow_runs.js";
+export { listFlowRuns, getFlowRun } from "./flow_runs.js";
+
+export type { RunFlowTestArgs, RunFlowTestResult } from "./test_widget.js";
+export { runFlowTest } from "./test_widget.js";

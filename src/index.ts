@@ -15,6 +15,43 @@ export type { AuthFile } from "./client/auth.js";
 export { ApiError } from "./schema/envelope.js";
 export * from "./schema/index.js";
 
-// Phase 3: tool-group façade
-export type { FlowSummary, FlowStatus, SetFlowStatusArgs, SetFlowStatusResult, AgentSummary, AgentDetails, AgentUpdate, PhoneNumberKind, PhoneNumberInfo, CustomFieldDTO, CustomFieldType, ContactDTO } from "./tools/index.js";
-export { listFlows, getFlow, updateFlow, validateFlowLocal, setFlowStatus, listAgents, getAgent, updateAgent, listPhoneNumbers, listCustomFields, upsertCustomField, deleteCustomField, getContact, updateContactAttribute } from "./tools/index.js";
+// Phase 3+: tool-group façade
+export type {
+  FlowSummary,
+  FlowStatus,
+  SetFlowStatusArgs,
+  SetFlowStatusResult,
+  AgentSummary,
+  AgentDetails,
+  AgentUpdate,
+  PhoneNumberKind,
+  PhoneNumberInfo,
+  CustomFieldDTO,
+  CustomFieldType,
+  ContactDTO,
+  FlowRunSummary,
+  TranscriptEntry,
+  NodePathEntry,
+  FlowRunDetail,
+  RunFlowTestArgs,
+  RunFlowTestResult,
+} from "./tools/index.js";
+export {
+  listFlows,
+  getFlow,
+  updateFlow,
+  validateFlowLocal,
+  setFlowStatus,
+  listAgents,
+  getAgent,
+  updateAgent,
+  listPhoneNumbers,
+  listCustomFields,
+  upsertCustomField,
+  deleteCustomField,
+  getContact,
+  updateContactAttribute,
+  listFlowRuns,
+  getFlowRun,
+  runFlowTest,
+} from "./tools/index.js";

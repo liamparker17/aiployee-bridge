@@ -16,6 +16,8 @@ import { listAgents, getAgent, updateAgent } from "./tools/agents.js";
 import { listCustomFields, upsertCustomField, deleteCustomField } from "./tools/custom_fields.js";
 import { getContact, updateContactAttribute } from "./tools/contacts.js";
 import { listPhoneNumbers } from "./tools/numbers.js";
+import { listFlowRuns, getFlowRun } from "./tools/flow_runs.js";
+import { runFlowTest } from "./tools/test_widget.js";
 import { FlowDTO } from "./dto.js";
 
 async function main(): Promise<void> {
@@ -313,6 +315,79 @@ async function main(): Promise<void> {
       return fail(err);
     }
   });
+
+  // --- list_flow_runs ---
+  server.tool(
+    "list_flow_runs",
+    [
+      "List recent flow runs (past call records) from the Conversations page.",
+      "",
+      "Returns an array of FlowRunSummary {uuid, flowUuid, agentUuid, startedAt, durationS, status, channel}.",
+      "Optional args: flowUuid (client-side filter), limit (default 25, max 200).",
+      "",
+      "Note: filtering is best-effort. If the listing page does not embed flow links the bridge cannot filter by flowUuid and returns the full set with a warning. Use get_flow_run to drill into any single record.",
+    ].join("\n"),
+    {
+      flowUuid: z.string().optional(),
+      limit: z.number().int().positive().max(200).optional(),
+    },
+    async (args) => {
+      try {
+        const callArgs: { flowUuid?: string; limit?: number } = {};
+        if (args.flowUuid !== undefined) callArgs.flowUuid = args.flowUuid;
+        if (args.limit !== undefined) callArgs.limit = args.limit;
+        const result = await listFlowRuns(client, callArgs);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- get_flow_run ---
+  server.tool(
+    "get_flow_run",
+    [
+      "Get the full detail for a single flow run (call record) by its UUID.",
+      "",
+      "Returns FlowRunDetail = FlowRunSummary + {transcript, nodePath?, metadata}.",
+      "Use after list_flow_runs to inspect why a specific call took a particular branch, what the transcript looked like, or what metadata the platform recorded.",
+    ].join("\n"),
+    {
+      uuid: z.string().min(1, "uuid is required"),
+    },
+    async ({ uuid }) => {
+      try {
+        const result = await getFlowRun(client, uuid);
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  // --- run_flow_test ---
+  server.tool(
+    "run_flow_test",
+    [
+      "Get a test-widget URL the human opens in a browser to run an end-to-end test of a flow.",
+      "",
+      "Returns {widgetUrl, hint}. The bridge CANNOT drive the chat headlessly — this is honest about the limitation. After the human finishes the test conversation, call list_flow_runs / get_flow_run to inspect the transcript.",
+      "",
+      "Implementation note: the endpoint is POST /v1/temporary-agent-widget. The bridge tries {flow_uuid} first; on a 400 mentioning agent_uuid it pivots to the flow's first connect_call_agent node's agent_uuid.",
+    ].join("\n"),
+    {
+      flowUuid: z.string().min(1, "flowUuid is required"),
+    },
+    async ({ flowUuid }) => {
+      try {
+        const result = await runFlowTest(client, { flowUuid });
+        return ok(result);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
 
   // ---------- connect + run ----------
   const transport = new StdioServerTransport();

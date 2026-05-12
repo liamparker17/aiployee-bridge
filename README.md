@@ -124,6 +124,10 @@ Restart the MCP client after editing the config.
 | `delete_custom_field` | `{slug?: string, uuid?: string}` (exactly one) | `{ok: true}` on success; throws if the row is missing |
 | `get_contact` | `uuid: string (UUID)` | Contact DTO with attributes map keyed by Custom Field slug |
 | `update_contact_attribute` | `{contactUuid, slug, value}` | `{ok: true}`; writes a single attribute via the contact's Yii form |
+| `set_flow_status` | `{uuid, status: "Active" \| "Inactive", confirm}` | `{previousStatus, newStatus, changed, phoneNumbersAffected}`; `confirm` MUST equal the flow's current name; refuses on phone-number collision with another Active flow |
+| `list_flow_runs` | `{flowUuid?, limit?}` (default 25, max 200) | Array of `FlowRunSummary` (uuid, flowUuid, agentUuid, startedAt, durationS, status, channel) parsed from the `/calls` listing page |
+| `get_flow_run` | `{uuid}` | `FlowRunDetail` = summary + `transcript`, optional `nodePath`, free-form `metadata`; parsed from `/calls/<uuid>/details` |
+| `run_flow_test` | `{flowUuid}` | `{widgetUrl, hint}` — open the URL in a browser to run a test conversation; the bridge cannot drive the chat headlessly |
 
 All tools return JSON serialised as a single MCP text content block.
 
@@ -147,6 +151,37 @@ All tools return JSON serialised as a single MCP text content block.
   need refreshing before `_identity` does. When the Agent / Custom Field /
   Contact tools start erroring, re-run `aiployee-bridge auth` with fresh
   `--cookie` values pulled from DevTools.
+
+- **`set_flow_status` requires the flow's exact name as a `confirm` token,
+  and refuses on phone-number collisions.** Activating a flow is a
+  two-condition gate: (1) `confirm` MUST equal the flow's current `name`
+  exactly — the bridge throws with the expected name quoted if it doesn't
+  match, so a caller can't blindly "Active" the wrong UUID; (2) when
+  transitioning to Active, the bridge scans every other `Active` flow's
+  inbound-call nodes for phone-number overlap and REFUSES with both flow
+  UUIDs named on collision. The bridge does NOT offer to deactivate the
+  conflicting flow — that's a multi-flow decision the LLM caller can make
+  separately if the user explicitly asks. Local validation also runs
+  before any PATCH; flows with error-severity issues are refused.
+
+- **`list_flow_runs` / `get_flow_run` scrape Yii HTML.** The `/calls`
+  listing and `/calls/<uuid>/details` pages are server-rendered (no JSON
+  API). The parsers are defensive and fail loud on listing-row schema
+  drift (a row missing the expected `/calls/<uuid>/details` link throws
+  with the offending HTML snippet truncated). If the listing page does
+  not embed flow-link hrefs, `list_flow_runs` returns the full unfiltered
+  set with a `console.warn` rather than silently dropping rows. The
+  `nodePath` field on `FlowRunDetail` is optional — surfaced only when
+  the platform renders a node-path table.
+
+- **`run_flow_test` cannot drive the chat headlessly.** It returns a
+  `widgetUrl` from `POST /v1/temporary-agent-widget`; the user opens it
+  in a browser to run the test conversation. The transcript shows up in
+  `get_flow_run` once the call completes. The endpoint accepts
+  `{flow_uuid}` first; on a 400 mentioning `agent_uuid` the bridge pivots
+  to the flow's first `connect_call_agent` node's `agentUuid`. If the
+  flow has no agent node the bridge throws a clear "no connect_call_agent
+  node" error.
 
 - **Permissive node types.** Eleven node types fall through to a `RawConfig`
   catch-all until their `data` shapes are fully documented: `internet_call`,
