@@ -40,28 +40,70 @@ function authFilePath() {
 }
 
 /**
- * Resolve the absolute path to dist/mcp-server.js inside the bridge's source
- * tree. The installer ships INSIDE the aiployee-bridge repo (apps/installer/),
- * so we walk up two levels from this file's directory to find the repo root.
+ * Resolve the absolute path to the bundled MCP server.
  *
- * When packaged via electron-builder, __dirname points inside app.asar — in
- * that case fall back to a value the user must provide via the UI (or via
- * AIPLOYEE_BRIDGE_PATH env var) since the repo source isn't bundled with the
- * installer binary by default.
+ * Resolution order:
+ *   1. AIPLOYEE_BRIDGE_PATH env var (dev override — points at a checkout
+ *      root that contains dist/mcp-server.js).
+ *   2. Packaged mode: process.resourcesPath/bridge/dist/mcp-server.js
+ *      (electron-builder copies the prepared `bundled-bridge/` folder
+ *      here via the `extraResources` config — see installer/package.json).
+ *   3. Dev mode: walk up to the repo root and read dist/mcp-server.js
+ *      from the working checkout.
  */
 function bridgeServerPath() {
-  // Env override wins
   if (process.env.AIPLOYEE_BRIDGE_PATH) {
     const p = path.resolve(process.env.AIPLOYEE_BRIDGE_PATH, "dist", "mcp-server.js");
     if (fs.existsSync(p)) return p;
   }
 
-  // dev mode: __dirname = .../apps/installer/src
+  if (app.isPackaged) {
+    const bundled = path.join(process.resourcesPath, "bridge", "dist", "mcp-server.js");
+    if (fs.existsSync(bundled)) return bundled;
+    return null; // packaged but the bundle is missing — build error
+  }
+
+  // Dev mode: __dirname = .../apps/installer/src
   const devGuess = path.resolve(__dirname, "..", "..", "..", "dist", "mcp-server.js");
   if (fs.existsSync(devGuess)) return devGuess;
 
-  // No reliable default; renderer will surface a "find your bridge" dialog
   return null;
+}
+
+/**
+ * Spawn the bridge as a Node process. When packaged we re-invoke the
+ * Electron binary with ELECTRON_RUN_AS_NODE=1 so we don't need Node on
+ * the user's machine. When in dev we use the system `node` so debugging
+ * is identical to the CLI experience.
+ *
+ * Both modes set the bridge's working directory to its own bundle root
+ * (which contains a `node_modules/` populated with @modelcontextprotocol/sdk
+ * + zod by prepare-bridge-bundle.js, or the repo's own node_modules in dev),
+ * so the bridge's `import` statements resolve correctly.
+ */
+function spawnBridge(args, options = {}) {
+  const serverPath = bridgeServerPath();
+  if (!serverPath) {
+    throw new Error("Could not locate the bundled bridge — installer is misbuilt.");
+  }
+
+  const cwd = path.dirname(path.dirname(serverPath)); // .../bundled-bridge or repo root
+  const spawnOpts = {
+    cwd,
+    ...options,
+    env: {
+      ...process.env,
+      ...(options.env || {}),
+    },
+  };
+
+  if (app.isPackaged) {
+    // Run Electron's bundled Node by setting ELECTRON_RUN_AS_NODE.
+    spawnOpts.env.ELECTRON_RUN_AS_NODE = "1";
+    return spawn(process.execPath, [serverPath, ...args], spawnOpts);
+  }
+  // Dev: use system node so behaviour matches `node dist/mcp-server.js`.
+  return spawn("node", [serverPath, ...args], spawnOpts);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,13 +173,7 @@ async function saveAuthViaBridge({ accessToken, phpsessid, identity, csrf, apiBa
     throw new Error("Cookie validation failed:\n" + errors.join("\n"));
   }
 
-  const serverPath = bridgeServerPath();
-  if (!serverPath) {
-    throw new Error("Could not locate the bridge's dist/mcp-server.js. Set AIPLOYEE_BRIDGE_PATH or rebuild the installer in-place inside the repo.");
-  }
-
   const args = [
-    serverPath,
     "auth",
     "--token", accessToken,
     "--cookie", `PHPSESSID=${phpsessid}`,
@@ -149,7 +185,7 @@ async function saveAuthViaBridge({ accessToken, phpsessid, identity, csrf, apiBa
   }
 
   return await new Promise((resolve, reject) => {
-    const child = spawn("node", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnBridge(args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d.toString(); });
@@ -212,14 +248,28 @@ async function wireClaudeDesktop() {
     await fsp.copyFile(configPath, backupPath);
   } catch {}
 
-  // On Windows, electron-builder produces a node binary that respects forward
-  // slashes; we normalise to forward slashes for cross-platform consistency.
-  const normalizedPath = serverPath.replace(/\\/g, "/");
+  // Normalise paths to forward slashes for cross-platform JSON consistency.
+  const normalizedScript = serverPath.replace(/\\/g, "/");
 
-  config.mcpServers["aiployee-bridge"] = {
-    command: "node",
-    args: [normalizedPath],
-  };
+  // When packaged, Claude Desktop spawns the installer binary in
+  // "Electron-as-Node" mode (ELECTRON_RUN_AS_NODE=1) so the user does NOT
+  // need a system Node install. In dev (running from `npm start`) we fall
+  // back to `node` on PATH for parity with the CLI walkthrough.
+  let mcpEntry;
+  if (app.isPackaged) {
+    const normalizedExec = process.execPath.replace(/\\/g, "/");
+    mcpEntry = {
+      command: normalizedExec,
+      args: [normalizedScript],
+      env: { ELECTRON_RUN_AS_NODE: "1" },
+    };
+  } else {
+    mcpEntry = {
+      command: "node",
+      args: [normalizedScript],
+    };
+  }
+  config.mcpServers["aiployee-bridge"] = mcpEntry;
 
   // Atomic write: write to .tmp then rename
   const tmpPath = `${configPath}.tmp-${Date.now()}`;
@@ -235,15 +285,14 @@ async function wireClaudeDesktop() {
 // ---------------------------------------------------------------------------
 
 async function testConnection() {
-  const serverPath = bridgeServerPath();
-  if (!serverPath) {
-    throw new Error("Could not locate the bridge's dist/mcp-server.js.");
-  }
-
   return await new Promise((resolve) => {
-    const child = spawn("node", [serverPath], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    let child;
+    try {
+      child = spawnBridge([], { stdio: ["pipe", "pipe", "pipe"] });
+    } catch (err) {
+      resolve({ ok: false, error: err.message });
+      return;
+    }
 
     let stdout = "";
     let stderr = "";

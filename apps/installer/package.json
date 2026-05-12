@@ -2,15 +2,16 @@
   "name": "aiployee-bridge-installer",
   "productName": "AIployee Bridge Installer",
   "version": "0.1.0",
-  "description": "Desktop GUI to install and configure the aiployee-bridge MCP server in Claude Desktop.",
+  "description": "Self-contained desktop GUI that installs the aiployee-bridge MCP server into Claude Desktop. Bundles the bridge runtime; no Node.js or git required on the user's machine.",
   "private": true,
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
+    "prebuild": "node scripts/prepare-bridge-bundle.js",
     "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "build:win": "node scripts/prepare-bridge-bundle.js && electron-builder --win",
+    "build:mac": "node scripts/prepare-bridge-bundle.js && electron-builder --mac",
+    "build:linux": "node scripts/prepare-bridge-bundle.js && electron-builder --linux"
   },
   "devDependencies": {
     "electron": "^33.0.0",
@@ -27,6 +28,14 @@
       "renderer/**/*",
       "assets/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "bundled-bridge",
+        "to": "bridge",
+        "filter": ["**/*"]
+      }
+    ],
+    "asarUnpack": [],
     "win": {
       "target": [
         {

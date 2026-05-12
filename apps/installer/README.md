@@ -1,11 +1,42 @@
 # AIployee Bridge Installer
 
-Electron desktop app that walks a non-technical user through:
+Self-contained Electron desktop app. Bundles the bridge runtime inside its
+own binary — **the user does NOT need Node.js, npm, or Git installed**.
+Walks a non-technical user through:
 
 1. Pasting their four AIployee session cookies (`access_token`, `PHPSESSID`, `_identity`, `_csrf`).
-2. Writing `~/.aiployee-bridge/auth.json` (delegates to the bridge's own `auth` CLI for cookie validation).
-3. Editing the user's Claude Desktop config to register `aiployee-bridge` as an MCP server (atomic write with a timestamped backup of any previous config).
-4. Running a connection test by spawning the bridge in MCP stdio mode and asserting `tools/list` returns the expected tool count.
+2. Writing `~/.aiployee-bridge/auth.json` (delegates to the bundled bridge's own `auth` subcommand for cookie validation).
+3. Editing the user's Claude Desktop config to register `aiployee-bridge` as an MCP server. The config's `command` points at the installer's OWN binary (`process.execPath`) with `env: { ELECTRON_RUN_AS_NODE: "1" }`, so Claude Desktop launches the bundled bridge using the Electron-bundled Node runtime — no system Node required.
+4. Running a connection test that spawns the bundled bridge in MCP stdio mode and asserts `tools/list` returns the expected tool count.
+
+## How the bundling works
+
+The bridge is copied into the packaged binary at build time via
+electron-builder's `extraResources` config:
+
+```
+<installer-binary>/
+  Contents/Resources/bridge/         (macOS)
+  resources/bridge/                  (Windows, Linux)
+    dist/                            ← compiled MCP server
+    node_modules/                    ← @modelcontextprotocol/sdk + zod only
+    package.json                     ← minimal, type:module
+```
+
+`scripts/prepare-bridge-bundle.js` is the `prebuild` hook that:
+
+1. Builds the bridge (`npm run build` in the repo root) if `dist/mcp-server.js` is stale.
+2. Wipes and recreates `apps/installer/bundled-bridge/`.
+3. Copies `dist/` from the repo root.
+4. Writes a minimal `package.json` (production deps only).
+5. Runs `npm install --omit=dev --ignore-scripts` inside `bundled-bridge/` to materialise the runtime `node_modules/`.
+
+electron-builder then picks up `bundled-bridge/` and writes it as
+`resources/bridge/` inside the installed app.
+
+At runtime:
+- **Packaged mode** (`app.isPackaged === true`): the installer resolves the bundled script via `process.resourcesPath/bridge/dist/mcp-server.js` and spawns it with `process.execPath` (the installer binary itself) + `ELECTRON_RUN_AS_NODE=1`.
+- **Dev mode** (`npm start`): the installer walks up two directories from `__dirname` to find the repo checkout's `dist/mcp-server.js` and spawns it with system `node` so behaviour matches the CLI walkthrough exactly.
 
 ## Development
 

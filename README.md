@@ -181,42 +181,53 @@ Contacts). The pure-JSON Flows tools need only the bearer token.
 
 ## GUI installer (recommended for non-technical users)
 
-A double-clickable installer app is available for Windows, macOS, and
-Linux. It walks you through pasting your four AIployee cookies, then
-configures Claude Desktop for you — no terminal commands, no editing
-JSON files by hand.
+A self-contained double-clickable installer is available for Windows,
+macOS, and Linux. The installer **bundles the bridge runtime inside its
+own binary** — you do NOT need Node.js, npm, or Git installed on your
+machine. Download one file, run it, paste cookies, done.
 
 **To use the GUI installer:**
 
 1. Download the installer for your OS from the
    [Releases page](https://github.com/liamparker17/aiployee-bridge/releases)
    (Windows: `.exe`, macOS: `.dmg`, Linux: `.AppImage`).
-2. You also need the bridge's source code on your machine. Follow
-   step 0 and step 1 of the walkthrough below to install Node.js + Git
-   and `git clone` the repo. The GUI installer needs to know where you
-   cloned it.
-3. Run the installer app. It will:
-   - Ask you to locate the cloned `aiployee-bridge` folder (one click).
-   - Open AIployee in your browser when you click the button.
-   - Show four labelled fields where you paste the cookies.
+2. Run it. It will:
+   - Open AIployee in your default browser when you click the button.
+   - Show four labelled fields where you paste the cookies (in-app
+     instructions explain where to find them in DevTools).
    - Save your credentials and wire Claude Desktop automatically.
-   - Offer a "Test connection" button that confirms it's working.
+   - Offer a "Test connection" button that confirms the bridge is alive.
+3. Restart Claude Desktop and ask "What AIployee flows do I have?" — that
+   is the entire setup.
+
+The installer's Claude Desktop config entry points at the installer's
+own binary (running in Electron-as-Node mode via `ELECTRON_RUN_AS_NODE=1`)
+so Claude Desktop can launch the bundled bridge without needing Node on
+the user's PATH.
 
 **To build the installer yourself** (if no pre-built release is
-available for your OS, or you want to audit the source):
+available for your OS, or you want to audit the source — Node 20.10+
+required at *build* time, not at *run* time):
 
 ```sh
-# From the repo root, after running `npm install && npm run build`:
+git clone https://github.com/liamparker17/aiployee-bridge.git
+cd aiployee-bridge
+npm install
+npm run build
 npm run installer:build
 ```
 
-The installer binary will appear in `apps/installer/release/`.
+The `installer:build` script runs `scripts/prepare-bridge-bundle.js`
+first (which builds the bridge and copies `dist/` + production
+`node_modules/` into `apps/installer/bundled-bridge/`) and then
+invokes electron-builder. The packaged binary lands in
+`apps/installer/release/`.
 
-The installer source lives in `apps/installer/` — see that folder's
-README for architecture and security details.
+See `apps/installer/README.md` for the bundling architecture,
+packaged-vs-dev resolution, signing notes, and security model.
 
 If you'd rather do everything by hand in a terminal (or you're a
-developer just wiring this into a dev box), use the walkthrough below.
+developer wiring this into a dev box), use the walkthrough below.
 
 ## Install from zero — full walkthrough
 
