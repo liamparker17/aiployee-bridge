@@ -15,7 +15,9 @@
     "dev": "tsc -p tsconfig.json --watch",
     "start": "node dist/mcp-server.js",
     "test": "node --test --import tsx tests/**/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "installer:dev": "cd apps/installer && npm install && npm start",
+    "installer:build": "cd apps/installer && npm install && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

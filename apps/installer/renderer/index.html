@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';">
+  <title>AIployee Bridge Installer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>AIployee Bridge Installer</h1>
+    <p class="subtitle">Connect Claude Desktop to your AIployee tenant in three steps.</p>
+  </header>
+
+  <main id="app">
+    <!-- ============== STATE 1: detecting ============== -->
+    <section id="state-detecting" class="state">
+      <div class="loader"></div>
+      <p>Detecting your setup&hellip;</p>
+    </section>
+
+    <!-- ============== STATE 2: bridge not found ============== -->
+    <section id="state-no-bridge" class="state hidden">
+      <h2>Where is aiployee-bridge installed?</h2>
+      <p>
+        I couldn't find the bridge automatically. Click below and select the
+        folder containing the bridge source code (the one with a
+        <code>dist/</code> folder inside).
+      </p>
+      <p class="hint">
+        If you haven't installed the bridge yet:
+        <a href="#" id="link-docs">read the install guide</a>.
+      </p>
+      <div class="actions">
+        <button id="btn-locate" class="primary">Choose folder&hellip;</button>
+        <button id="btn-retry-detect">I just installed it &mdash; retry</button>
+      </div>
+      <div id="locate-error" class="error hidden"></div>
+    </section>
+
+    <!-- ============== STATE 3: cookies needed ============== -->
+    <section id="state-cookies" class="state hidden">
+      <h2>Paste your AIployee cookies</h2>
+      <ol class="steps">
+        <li>
+          Click the button below to open AIployee in your browser. Sign in if you aren't already.
+          <button id="btn-open-aiployee" class="ghost">Open aiployee.jobix.ai</button>
+        </li>
+        <li>
+          Press <kbd>F12</kbd> &rarr; <strong>Application</strong> tab &rarr;
+          <strong>Storage</strong> &rarr; <strong>Cookies</strong> &rarr;
+          <code>https://aiployee.jobix.ai</code>.
+        </li>
+        <li>
+          Find each of the four cookies below in the table, copy the <strong>Value</strong>
+          column, and paste it into the matching field here.
+        </li>
+      </ol>
+
+      <form id="cookie-form" autocomplete="off">
+        <label>
+          <span>access_token</span>
+          <textarea name="accessToken" rows="2" required spellcheck="false" placeholder="eyJ0eXAi…"></textarea>
+        </label>
+        <label>
+          <span>PHPSESSID</span>
+          <input type="text" name="phpsessid" required spellcheck="false" placeholder="e.g. 7q9hpu5lkj…">
+        </label>
+        <label>
+          <span>_identity</span>
+          <textarea name="identity" rows="2" required spellcheck="false" placeholder="long value starting with %5B…"></textarea>
+        </label>
+        <label>
+          <span>_csrf</span>
+          <textarea name="csrf" rows="2" required spellcheck="false" placeholder="usually starts with a long base64-ish string"></textarea>
+        </label>
+
+        <details class="advanced">
+          <summary>Advanced (sandbox tenant)</summary>
+          <label>
+            <span>API base URL</span>
+            <input type="text" name="apiBase" spellcheck="false" placeholder="https://dashboard-api.jobix.ai/v1">
+          </label>
+        </details>
+
+        <div class="actions">
+          <button type="submit" id="btn-save-auth" class="primary">Save credentials &amp; wire Claude Desktop</button>
+        </div>
+      </form>
+      <div id="cookies-error" class="error hidden"></div>
+    </section>
+
+    <!-- ============== STATE 4: wiring ============== -->
+    <section id="state-wiring" class="state hidden">
+      <div class="loader"></div>
+      <p id="wiring-status">Saving credentials&hellip;</p>
+    </section>
+
+    <!-- ============== STATE 5: done ============== -->
+    <section id="state-done" class="state hidden">
+      <h2>&check; Installed</h2>
+      <p>The bridge is wired into Claude Desktop. Close and reopen Claude Desktop, then ask:</p>
+      <blockquote>"What AIployee flows do I have?"</blockquote>
+
+      <dl class="summary">
+        <dt>Credentials file</dt>
+        <dd><code id="summary-auth"></code></dd>
+        <dt>Claude Desktop config</dt>
+        <dd><code id="summary-config"></code></dd>
+        <dt>Backup of previous config</dt>
+        <dd><code id="summary-backup">(none)</code></dd>
+      </dl>
+
+      <div class="actions">
+        <button id="btn-test" class="primary">Test connection</button>
+        <button id="btn-repaste">My cookies expired &mdash; re-paste</button>
+      </div>
+      <div id="test-result" class="result hidden"></div>
+    </section>
+
+  </main>
+
+  <footer>
+    <small>
+      Cookies are written to <code id="footer-auth-path">~/.aiployee-bridge/auth.json</code>
+      with owner-only permissions. They are never transmitted anywhere except to AIployee itself.
+    </small>
+  </footer>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

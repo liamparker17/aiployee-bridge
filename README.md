@@ -179,6 +179,45 @@ Browser session cookies (`PHPSESSID`, `_identity`, `_csrf`) are needed
 ONLY if you want to use the Yii-form tools (Agents / Custom Fields /
 Contacts). The pure-JSON Flows tools need only the bearer token.
 
+## GUI installer (recommended for non-technical users)
+
+A double-clickable installer app is available for Windows, macOS, and
+Linux. It walks you through pasting your four AIployee cookies, then
+configures Claude Desktop for you — no terminal commands, no editing
+JSON files by hand.
+
+**To use the GUI installer:**
+
+1. Download the installer for your OS from the
+   [Releases page](https://github.com/liamparker17/aiployee-bridge/releases)
+   (Windows: `.exe`, macOS: `.dmg`, Linux: `.AppImage`).
+2. You also need the bridge's source code on your machine. Follow
+   step 0 and step 1 of the walkthrough below to install Node.js + Git
+   and `git clone` the repo. The GUI installer needs to know where you
+   cloned it.
+3. Run the installer app. It will:
+   - Ask you to locate the cloned `aiployee-bridge` folder (one click).
+   - Open AIployee in your browser when you click the button.
+   - Show four labelled fields where you paste the cookies.
+   - Save your credentials and wire Claude Desktop automatically.
+   - Offer a "Test connection" button that confirms it's working.
+
+**To build the installer yourself** (if no pre-built release is
+available for your OS, or you want to audit the source):
+
+```sh
+# From the repo root, after running `npm install && npm run build`:
+npm run installer:build
+```
+
+The installer binary will appear in `apps/installer/release/`.
+
+The installer source lives in `apps/installer/` — see that folder's
+README for architecture and security details.
+
+If you'd rather do everything by hand in a terminal (or you're a
+developer just wiring this into a dev box), use the walkthrough below.
+
 ## Install from zero — full walkthrough
 
 This section assumes you have **never used Git, Node.js, or a terminal
